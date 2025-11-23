@@ -843,7 +843,7 @@ class GroupFSPlugin(Star):
                     return "", "压缩包为空或解压失败"
                 
                 # 构建文件结构树
-                file_structure = ["📦 压缩包内文件结构：\n"]
+                file_structure = ["📦 压缩包内文件结构："]
                 for f_path in sorted(all_extracted_files):
                     relative_path = os.path.relpath(f_path, extract_path)
                     file_size = os.path.getsize(f_path)
