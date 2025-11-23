@@ -4,6 +4,7 @@
 import asyncio
 import os
 import time
+from datetime import datetime
 from typing import List, Dict, Optional
 import chardet
 import subprocess
@@ -13,13 +14,12 @@ import aiohttp
 import croniter
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger
 import astrbot.api.message_components as Comp
 from astrbot.api.message_components import Plain, Node, Nodes
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-from aiocqhttp.exceptions import ActionFailed
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path 
+from aiocqhttp.exceptions import ActionFailed 
 
 from . import utils
 
@@ -27,7 +27,7 @@ from . import utils
     "astrbot_plugin_GroupFS",
     "Foolllll",
     "管理QQ群文件",
-    "0.8.1",
+    "0.9",
     "https://github.com/Foolllll-J/astrbot_plugin_GroupFS"
 )
 class GroupFSPlugin(Star):
@@ -169,7 +169,7 @@ class GroupFSPlugin(Star):
 
     async def _perform_scheduled_check(self, group_id: int, auto_delete: bool):
         """统一的定时检查函数，根据auto_delete决定是否删除。"""
-        log_prefix = "[定时任务-自动清理]" if auto_delete else "[定时任务-仅检查]"
+        log_prefix = "[清理任务]" if auto_delete else "[检查任务]"
         report_title = "清理报告" if auto_delete else "检查报告"
         
         try:
@@ -287,7 +287,7 @@ class GroupFSPlugin(Star):
                 logger.error(f"[{group_id}-群文件遍历] 递归获取文件夹 '{current_folder_name}' 内容时出错: {e}")
                 continue
         return all_files
-        
+    
     async def _get_all_files_recursive_core(self, group_id: int, bot) -> List[Dict]:
         """
         兼容 /cdf, /cf, /sf, /df 等指令。
@@ -343,6 +343,10 @@ class GroupFSPlugin(Star):
             
             logger.info(f"{log_prefix} 成功下载文件 '{file_name}' ({utils.format_bytes(file_size)}) 到: {target_path}")
             return True
+        except ActionFailed as e:
+            # NapCat/NTQQ API 调用失败，如文件已失效(-134)等
+            logger.warning(f"{log_prefix} 下载文件 '{file_name}' 失败 (API错误): {e.message if hasattr(e, 'message') else str(e)}")
+            return False
         except FileNotFoundError:
             logger.error(f"{log_prefix} 创建目标文件路径失败 (FileNotFoundError)，可能目录创建失败。")
             return False
@@ -411,7 +415,7 @@ class GroupFSPlugin(Star):
                                                              file=file_uri,
                                                              name=file_name,
                                                              timeout=300)
-
+            
             # 2. 检查 upload_result 是否为 None
             if upload_result is None:
                  logger.warning(f"{log_prefix} 文件 {file_name} 上传时 API 调用返回 NONE。根据测试经验，文件可能已在后台提交。")
@@ -425,15 +429,20 @@ class GroupFSPlugin(Star):
             # 4. 处理 API 明确返回失败状态
             else:
                 error_msg = upload_result.get('wording', upload_result.get('errMsg', 'API返回失败'))
+                retcode = upload_result.get('retcode')
                 
                 # 如果返回的错误是 NTQQ 的 "rich media transfer failed" (retcode=1200)
-                if upload_result.get('retcode') == 1200:
+                if retcode == 1200:
                     logger.error(f"{log_prefix} 文件 {file_name} 上传失败 (NTQQ内部拒绝: {error_msg})。视为致命失败，中断任务。")
                     # 客户端拒绝，返回 False
                     return False
                 else:
-                    # 其他非 1200 的失败码
-                    logger.warning(f"{log_prefix} 文件 {file_name} 上传失败 (retcode {upload_result.get('retcode')}). 详情: {error_msg}。容忍并继续。")
+                    # 其他非 1200 的失败码，或者 retcode 为 None
+                    # 根据经验，retcode=None 通常表示请求已提交但响应异常，文件可能已在后台处理
+                    if retcode is None:
+                        logger.info(f"{log_prefix} 文件 {file_name} 上传调用返回异常状态 (retcode=None)，但根据经验文件可能已提交成功，继续执行。")
+                    else:
+                        logger.warning(f"{log_prefix} 文件 {file_name} 上传返回非标准状态码 (retcode={retcode})。详情: {error_msg}。容忍并继续。")
                     return True
 
         except ActionFailed as e:
@@ -779,7 +788,7 @@ class GroupFSPlugin(Star):
         """从本地压缩文件中解压并预览第一个文本文件。返回 (预览内容, 错误信息)。
            使用 7za 命令来支持更多格式。
         """
-        temp_dir = os.path.join(os.getcwd(), 'temp_file_previews')
+        temp_dir = os.path.join(StarTools.get_data_dir('astrbot_plugin_GroupFS'), 'temp_file_previews')
         os.makedirs(temp_dir, exist_ok=True)
         extract_path = os.path.join(temp_dir, f"extract_{int(time.time())}")
         os.makedirs(extract_path, exist_ok=True)
@@ -829,7 +838,24 @@ class GroupFSPlugin(Star):
                     break
             
             if not preview_file_path:
-                return "", "压缩包中没有可预览的文本文件"
+                # 如果没有找到txt文件，输出压缩包的文件结构
+                if not all_extracted_files:
+                    return "", "压缩包为空或解压失败"
+                
+                # 构建文件结构树
+                file_structure = ["📦 压缩包内文件结构：\n"]
+                for f_path in sorted(all_extracted_files):
+                    relative_path = os.path.relpath(f_path, extract_path)
+                    file_size = os.path.getsize(f_path)
+                    size_str = utils.format_bytes(file_size)
+                    # 计算缩进层级
+                    depth = relative_path.count(os.sep)
+                    indent = "  " * depth
+                    file_name = os.path.basename(relative_path)
+                    file_structure.append(f"{indent}├─ {file_name} ({size_str})")
+                
+                structure_text = "\n".join(file_structure)
+                return structure_text, None
             
             with open(preview_file_path, 'rb') as f:
                 content_bytes = f.read(self.preview_length * 4)
@@ -910,7 +936,7 @@ class GroupFSPlugin(Star):
                         if resp.status != 200 and resp.status != 206:
                             return "", f"❌ 下载文件「{file_name}」失败 (HTTP: {resp.status})。"
                         
-                        temp_dir = os.path.join(os.getcwd(), 'temp_file_previews')
+                        temp_dir = os.path.join(StarTools.get_data_dir('astrbot_plugin_GroupFS'), 'temp_file_previews')
                         os.makedirs(temp_dir, exist_ok=True)
                         local_file_path = os.path.join(temp_dir, f"{file_id}_{file_name}")
                         
@@ -929,8 +955,13 @@ class GroupFSPlugin(Star):
                     return "", error_msg
                 preview_content = preview_text
             
-            if len(preview_content) > self.preview_length:
+            # 文件结构列表不截断，普通文本预览才截断
+            is_file_structure = preview_content.startswith("📦 压缩包内文件结构：")
+            if not is_file_structure and len(preview_content) > self.preview_length:
                 preview_content = preview_content[:self.preview_length] + "..."
+            
+            # 发送前输出日志
+            logger.info(f"[文件预览] 文件: {file_name}, 预览长度: {len(preview_content)}, 是否文件结构: {is_file_structure}")
             
             return preview_content, None
                 
@@ -987,7 +1018,7 @@ class GroupFSPlugin(Star):
             logger.error(f"[群文件备份-压缩] 打包时发生未知错误: {e}", exc_info=True)
             return False
 
-    async def _perform_group_file_backup(self, event: AstrMessageEvent, group_id: int):
+    async def _perform_group_file_backup(self, event: AstrMessageEvent, group_id: int, date_filter_timestamp: Optional[int] = None):
         log_prefix = f"[群文件备份-{group_id}]"
         backup_root_dir = None
         final_zip_path = None
@@ -1013,9 +1044,13 @@ class GroupFSPlugin(Star):
             
             notification = (
                 f"备份任务已启动，目标群ID: {group_id}。\n"
-                f"该群文件总数: {total_count}。\n"
-                f"备份操作将遍历所有文件，请耐心等待，这可能需要几分钟。"
+                f"该群文件总数: {total_count}。"
             )
+            if date_filter_timestamp:
+                date_str = datetime.fromtimestamp(date_filter_timestamp).strftime('%Y-%m-%d')
+                notification += f"\n将仅备份 {date_str} 之后上传的文件。"
+            notification += "\n备份操作将遍历所有文件，请耐心等待，这可能需要几分钟。"
+            
             await event.send(MessageChain([Comp.Plain(notification)]))
             logger.info(f"{log_prefix} 预通知已发送。")
 
@@ -1024,7 +1059,7 @@ class GroupFSPlugin(Star):
             group_name = group_info.get('group_name', str(group_id))
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             
-            temp_plugin_dir = os.path.join(get_astrbot_data_path(), 'plugins_data', 'astrbot_plugin_GroupFS')
+            temp_plugin_dir = StarTools.get_data_dir('astrbot_plugin_GroupFS')
             temp_base_dir = os.path.join(temp_plugin_dir, 'temp_backup_cache') 
             
             # 实际存放文件和最终 zip 的目录
@@ -1049,22 +1084,23 @@ class GroupFSPlugin(Star):
                 file_name = file_info.get('file_name', '未知文件')
                 file_id = file_info.get('file_id')
                 file_size = file_info.get('size', 0)
+                file_modify_time = file_info.get('modify_time', 0)
                 relative_path = file_info.get('relative_path', '')
                 
-                logger.info(f"{log_prefix} ({i+1}/{total_file_count_all}) 正在检查文件: '{file_name}'")
+                # 4.1. 过滤：日期筛选
+                if date_filter_timestamp and file_modify_time < date_filter_timestamp:
+                    continue
 
-                # 4.1. 过滤：大小和后缀名
+                # 4.2. 过滤：大小和后缀名
                 if size_limit_bytes > 0 and file_size > size_limit_bytes:
-                    logger.warning(f"{log_prefix} 文件 '{file_name}' ({utils.format_bytes(file_size)}) 超过大小限制 ({self.backup_file_size_limit_mb}MB)，跳过。")
                     continue
                 
                 _, ext = os.path.splitext(file_name)
                 ext = ext[1:].lower()
                 if self.backup_file_extensions and ext not in self.backup_file_extensions:
-                    logger.warning(f"{log_prefix} 文件 '{file_name}' (.{ext}) 不在允许的后缀名范围 {self.backup_file_extensions} 内，跳过。")
                     continue
                 
-                # 4.2. 下载
+                # 4.3. 下载
                 download_success = await self._download_and_save_file(
                     group_id, file_id, file_name, file_size, relative_path, backup_root_dir, client
                 )
@@ -1177,32 +1213,174 @@ class GroupFSPlugin(Star):
         finally:
              asyncio.create_task(self._cleanup_backup_temp(backup_root_dir, final_zip_path))
 
+    @filter.command("ddf")
+    async def on_detect_duplicates_command(self, event: AstrMessageEvent):
+        """检测群文件中的重复文件（使用LLM分析）"""
+        if not self.bot:
+            self.bot = event.bot
+        
+        user_id = int(event.get_sender_id())
+        group_id = event.get_group_id()
+        
+        if not group_id:
+            yield event.plain_result("❌ 此指令仅可在群聊中使用。")
+            return
+        
+        # 权限校验
+        if user_id not in self.admin_users:
+            yield event.plain_result("⚠️ 您没有执行重复文件检测的权限。")
+            return
+        
+        # 白名单校验
+        if self.group_whitelist and int(group_id) not in self.group_whitelist:
+            yield event.plain_result("⚠️ 当前群聊不在插件配置的白名单中。")
+            return
+        
+        try:
+            # 获取所有文件信息
+            all_files = await self._get_all_files_recursive_core(int(group_id), self.bot)
+            
+            if not all_files:
+                yield event.plain_result("❌ 未找到任何文件。")
+                return
+            
+            # 构建文件列表字符串
+            file_list_parts = []
+            for file_info in all_files:
+                file_name = file_info.get('file_name', '未知')
+                file_size = file_info.get('size', 0)
+                file_time = file_info.get('modify_time', 0)
+                
+                # 格式化时间
+                try:
+                    time_str = datetime.fromtimestamp(file_time).strftime('%Y-%m-%d')
+                except:
+                    time_str = '未知'
+                
+                # 格式化文件大小
+                size_str = utils.format_bytes(file_size)
+                
+                file_list_parts.append(f"- {file_name} | {time_str} | {size_str}")
+            
+            file_list_str = "\n".join(file_list_parts)
+            
+            # 构建提示词
+            prompt = f"""请仔细分析下面的文件列表，找出所有疑似重复的小说文件（同一本书的不同版本），并以 Markdown 表格形式列出。
+
+【重要规则】：
+1. 只输出重复文件对，每对文件只出现一次！同一对文件不要重复列出（例如A和B重复，只能出现一次，不要既列"A→B"又列"B→A"）
+2. 判断标准：
+   - 文件名高度相似（去除版本号、日期、文件后缀等后主体名称相同）
+   - 同一作者的同一作品
+3. 状态列填写：
+   - "可删除"：通过文件名差异可明确是旧版本，应该删除
+   - "待定"：无法确定哪个是旧版本，需要人工判断
+
+【输出格式】：
+- 表格只有3列：状态 | 旧版本文件信息 | 新版本文件信息
+- 文件信息必须在同一个单元格内，格式为：文件名 \ 修改时间 \ 大小，此三者缺一不可
+- 注意：文件信息的各部分用"\"（反斜杠）连接，保持在同一个表格单元格中
+- 按旧版本文件的修改时间从旧到新排序
+
+【输出示例】：
+| 状态 | 旧版本文件信息 | 新版本文件信息 |
+|---|---|---|
+| 可删除 | 《示例小说》01_10章.txt \ 2024-01-15 \ 1.2MB | 《示例小说》01_20章.txt \ 2024-02-20 \ 2.5MB |
+| 待定 | 《另一本书》完整版.zip \ 2024-03-10 \ 3.5MB | 《另一本书》完整版.txt \ 2024-03-10 \ 8.2MB |
+
+重要：表格只能有3列，不要把时间和大小拆分成独立的列！
+
+【特别注意】：
+- 如果文件列表中没有重复文件，直接输出：未检测到重复文件
+- 不要输出任何其他解释或询问
+
+以下是文件信息列表：
+
+{file_list_str}"""
+            
+            # 获取当前聊天模型
+            umo = event.unified_msg_origin
+            provider_id = await self.context.get_current_chat_provider_id(umo=umo)
+            
+            if not provider_id:
+                yield event.plain_result("❌ 未配置聊天模型，无法使用此功能。")
+                return
+            
+            yield event.plain_result("🤖 正在调用AI检测重复文件，这可能需要一些时间...")
+            
+            # 调用LLM
+            llm_resp = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+            )
+            
+            if not llm_resp or not llm_resp.completion_text:
+                yield event.plain_result("❌ AI分析失败，请稍后重试。")
+                return
+            
+            # 检查是否检测到重复文件
+            response_text = llm_resp.completion_text.strip()
+            if "未检测到重复文件" in response_text:
+                # 如果没有重复文件，直接发送文本消息
+                yield event.plain_result("✅ 未检测到重复文件")
+                return
+            
+            # 将文本转换为图片
+            try:
+                logger.info(f"[重复文件检测] AI响应结果：\n{response_text}")
+                image_url = await self.text_to_image(response_text)
+                yield event.image_result(image_url)
+            except Exception as img_error:
+                logger.warning(f"文本转图片失败: {img_error}，将发送纯文本结果")
+                # 如果转图失败，降级为发送文本
+                await self._send_or_forward(event, response_text, "重复文件检测")
+            
+        except Exception as e:
+            logger.error(f"检测重复文件失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 检测过程中发生错误: {str(e)}")
+
     @filter.command("gfb")
     async def on_group_file_backup_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
         
-        # 1. 解析目标群ID
+        # 1. 解析目标群ID和日期参数
         group_id_str = event.get_group_id()
         user_id = int(event.get_sender_id())
         
         command_parts = event.message_str.split()
         target_group_id: Optional[int] = None
+        date_filter_timestamp: Optional[int] = None
         
+        # 解析参数: /gfb [群号] [日期]
         if len(command_parts) > 1:
             try:
                 target_group_id = int(command_parts[1])
+                # 如果有第三个参数，尝试解析为日期
+                if len(command_parts) > 2:
+                    date_filter_timestamp = utils.parse_date_param(command_parts[2])
+                    if date_filter_timestamp is None:
+                        await event.send(MessageChain([Comp.Plain("❌ 日期格式错误。支持格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD\n示例: /gfb 123456 2024-01-01")]))
+                        return
             except ValueError:
-                await event.send(MessageChain([Comp.Plain("❌ 格式错误：请提供有效的群号。用法: /gfb [群号]")]))
-                return
+                # 可能第一个参数是日期而不是群号
+                if group_id_str:
+                    target_group_id = int(group_id_str)
+                    date_filter_timestamp = utils.parse_date_param(command_parts[1])
+                    if date_filter_timestamp is None:
+                        await event.send(MessageChain([Comp.Plain("❌ 格式错误：请提供有效的群号或日期。\n用法: /gfb [群号] [日期]\n日期格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD")]))
+                        return
+                else:
+                    await event.send(MessageChain([Comp.Plain("❌ 格式错误：请提供有效的群号。用法: /gfb <群号> [日期]")]))
+                    return
         elif group_id_str:
             # 群聊中且没有参数，备份当前群
             target_group_id = int(group_id_str)
         else:
             # 私聊中且没有参数
-            await event.send(MessageChain([Comp.Plain("❌ 格式错误：在私聊中请指定要备份的群号。用法: /gfb <群号>")]))
+            await event.send(MessageChain([Comp.Plain("❌ 格式错误：在私聊中请指定要备份的群号。\n用法: /gfb <群号> [日期]\n日期格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD")]))
             return
 
-        logger.info(f"用户 {user_id} 触发 /gfb 备份指令，目标群ID: {target_group_id}")
+        logger.info(f"用户 {user_id} 触发 /gfb 备份指令，目标群ID: {target_group_id}, 日期筛选: {command_parts[2] if len(command_parts) > 2 else '无'}")
 
         # 2. 权限和白名单校验
         if user_id not in self.admin_users:
@@ -1215,7 +1393,7 @@ class GroupFSPlugin(Star):
 
         # 3. 启动异步备份任务
         self.active_tasks.append(asyncio.create_task(
-            self._perform_group_file_backup(event, target_group_id)
+            self._perform_group_file_backup(event, target_group_id, date_filter_timestamp)
         ))
         event.stop_event()
 
