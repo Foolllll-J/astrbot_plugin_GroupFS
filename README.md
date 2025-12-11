@@ -1,6 +1,6 @@
-# GroupFS - QQ群文件管理插件
+# 📁 GroupFS - QQ群文件管理插件
 
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-AGPL--3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![AstrBot](https://img.shields.io/badge/framework-AstrBot-orange)
 
@@ -40,32 +40,13 @@
    apk add zip p7zip
    ```
 2. **安装插件**: 下载本插件的完整文件夹，并放入 AstrBot 的 `data/plugins/` 目录下。
-3. **安装依赖库**: 本插件需要 `aiohttp`, `chardet` 和 `croniter` 库。请在您的机器人运行环境中执行：
-   
-   ```bash
-   pip install aiohttp chardet croniter
-   ```
-4. **重启机器人**: 彻底重启您的 AstrBot 主程序（例如使用 `docker restart`），以确保插件和依赖被正确加载。
+3. **重启 AstrBot**。
 
 ---
 
 ## ⚙️ 配置
 
-插件的配置项定义在 `_conf_schema.json` 文件中，您可以在 AstrBot 的管理后台方便地进行图形化配置。
-
-| 配置项 | 类型 | 描述 |
-| :--- | :--- | :--- |
-| `group_whitelist` | `list` | 群组白名单。插件指令只在列表中的群组生效。若留空，则对所有群组生效。 |
-| `admin_users` | `list` | 管理员QQ列表。只有在此列表中的用户才有权使用管理指令。为了安全，强烈建议配置此项！ |
-| `preview_length` | `int` | 文本预览长度。使用 `/sf ... <序号>` 指令时，显示的内容预览的最大字符数。默认为 300。 |
-| `enable_zip_preview` | `bool` | 启用对 `.zip` 压缩包内文本文件的预览功能。 |
-| `default_zip_password` | `string` | 当尝试预览加密的 `.zip` 文件时，会首先使用此密码尝试解压。|
-| `storage_limits` | `list` | 群文件容量监控阈值。格式为 `"群号:文件数量上限:空间上限GB"` 的字符串列表，例如 `"123456:1000:9.5"`。 |
-| `scheduled_check_tasks` | `list` | 定时失效文件检查任务。格式为 `"群号:cron表达式"`，例如 `"123456:0 3 * * 1"` 代表每周一凌晨3点检查。 |
-| `forward_threshold` | `int` | 长消息合并转发阈值。当插件的单条回覆超过此字数时，将自动转为合并转发。设置为 0 则禁用此功能。 |
-| `backup_zip_password` | `string` | 备份压缩包加密密码。使用 `/gfb` 指令备份时，生成的 ZIP 包将使用此密码加密。留空则不加密。 |
-| `backup_file_size_limit_mb` | `int` | 单文件备份大小上限 (MB)。超过此大小的文件将跳过备份。设置为 0 则表示无限制。 |
-| `backup_file_extensions` | `text` | 允许备份的文件扩展名。用逗号分隔（如：`txt,pdf,jpg`）。留空则备份所有文件。 |
+首次加载后，请在 AstrBot 后台 -> 插件 页面找到本插件进行设置。所有配置项都有详细的说明和提示。
 
 ---
 
@@ -129,6 +110,9 @@
 
 ## 📝 更新日志
 
+<details>
+<summary>点击展开更新日志</summary>
+
 * **v0.9**
   * 新增 重复文件检测指令 (`/ddf`)，支持调用AI智能分析群文件中的疑似重复文件。
   * 优化 备份指令 (`/gfb`)，支持日期参数进行增量备份，只备份指定日期后的新文件。
@@ -156,9 +140,13 @@
 * **v0.1**
   * 初步实现 基础的文件删除 功能，允许管理员通过 `/df <文件名>` 指令管理群文件。
 
+</details>
+
+---
+
 ## ❓ 常见问题 (FAQ)
 
-### **Q: 插件突然不工作了，或者启动时报错，我该怎么办？**
+### **Q: 插件工作异常，该怎么办？**
 
 **A:** 在遇到任何插件运行错误或功能异常时，请按照以下步骤进行排查和解决：
 
