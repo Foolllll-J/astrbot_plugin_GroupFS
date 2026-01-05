@@ -2,7 +2,10 @@
 
 import datetime
 from datetime import datetime as dt
-from typing import Optional
+from typing import Optional, List
+from astrbot.api.event import AstrMessageEvent, MessageChain
+from astrbot.api import logger
+import astrbot.api.message_components as Comp
 
 # --- 辅助函数：格式化文件大小 ---
 def format_bytes(size: int, target_unit=None) -> str:
@@ -48,8 +51,34 @@ def parse_date_param(date_str: str) -> Optional[int]:
     return None
 
 # --- 常量：定义支持预览的文件扩展名列表 ---
-SUPPORTED_PREVIEW_EXTENSIONS = (
+SUPPORTED_TEXT_FORMATS = (
     '.txt', '.md', '.json', '.xml', '.html', '.css', 
     '.js', '.py', '.java', '.c', '.cpp', '.h', '.hpp', 
-    '.go', '.rs', '.rb', '.php', '.log', '.ini', '.yml', '.yaml'
+    '.go', '.rs', '.rb', '.php', '.log', '.ini', '.yml', '.yaml',
+    '.toml', '.conf', '.cfg', '.sh', '.bat', '.ps1', '.sql',
+    '.csv', '.tsv', '.env', '.dockerfile', '.gitignore'
 )
+
+SUPPORTED_ARCHIVE_FORMATS = (
+    '.zip', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz',
+    '.iso', '.wim', '.rar'
+)
+
+# --- 辅助函数：格式化搜索结果 ---
+def format_search_results(files: list[dict], search_term: str, for_delete: bool = False) -> str:
+    reply_text = f"🔍 找到了 {len(files)} 个与「{search_term}」相关的结果：\n"
+    reply_text += "-" * 20
+    for i, file_info in enumerate(files, 1):
+        reply_text += (
+            f"\n[{i}] {file_info.get('file_name')}"
+            f"\n  上传者: {file_info.get('uploader_name', '未知')}"
+            f"\n  大小: {format_bytes(file_info.get('size'))}"
+            f"\n  修改时间: {format_timestamp(file_info.get('modify_time'))}"
+        )
+    reply_text += "\n" + "-" * 20
+    if for_delete:
+        reply_text += f"\n请使用 /删除 {search_term} [序号] 来删除指定文件。"
+    else:
+        reply_text += f"\n如需删除，请使用 /删除 {search_term} [序号]"
+    return reply_text
