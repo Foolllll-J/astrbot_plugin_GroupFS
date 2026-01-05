@@ -62,6 +62,7 @@ SUPPORTED_TEXT_FORMATS = (
 
 SUPPORTED_ARCHIVE_FORMATS = (
     '.zip', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    '.tar.gz', '.tgz', '.tar.bz2', '.tbz2', '.tar.xz', '.txz',
     '.iso', '.wim', '.rar'
 )
 

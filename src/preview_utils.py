@@ -22,7 +22,7 @@ async def get_preview_from_bytes(content_bytes: bytes) -> tuple[str, str]:
     except Exception:
         return "", "未知"
 
-async def get_preview_from_archive(file_path: str, default_zip_password: str, preview_length: int, cleanup_fn) -> tuple[str, str]:
+async def get_preview_from_archive(file_path: str, default_zip_password: str, preview_length: int, cleanup_fn, inner_target: str = None) -> tuple[str, str]:
     """从本地压缩文件中解压并预览最合适的文本文件。支持多种格式。"""
     temp_dir = os.path.join(StarTools.get_data_dir('astrbot_plugin_GroupFS'), 'temp_file_previews')
     os.makedirs(temp_dir, exist_ok=True)
@@ -33,8 +33,13 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
     error_msg = None
     
     try:
+        # 1. 解压文件
         logger.info(f"正在尝试无密码解压文件 '{os.path.basename(file_path)}'...")
         command_no_pwd = ["7za", "x", file_path, f"-o{extract_path}", "-y"]
+        # 如果有指定内部路径（非序号），只解压该文件以提高速度
+        if inner_target and not inner_target.isdigit():
+             command_no_pwd.append(inner_target)
+
         process = await asyncio.create_subprocess_exec(
             *command_no_pwd,
             stdout=subprocess.PIPE,
@@ -46,6 +51,8 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
             if default_zip_password:
                 logger.info("无密码解压失败，正在尝试使用默认密码...")
                 command_with_pwd = ["7za", "x", file_path, f"-o{extract_path}", f"-p{default_zip_password}", "-y"]
+                if inner_target and not inner_target.isdigit():
+                    command_with_pwd.append(inner_target)
                 process = await asyncio.create_subprocess_exec(
                     *command_with_pwd,
                     stdout=subprocess.PIPE,
@@ -65,54 +72,76 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
         if error_msg:
             return "", error_msg
 
-        all_extracted_files = [os.path.join(dirpath, f) for dirpath, _, filenames in os.walk(extract_path) for f in filenames]
+        all_extracted_files = []
+        for dirpath, _, filenames in os.walk(extract_path):
+            for f in filenames:
+                f_p = os.path.join(dirpath, f)
+                all_extracted_files.append(f_p)
+        
+        # 排序以保证序号稳定
+        all_extracted_files.sort()
         
         if not all_extracted_files:
+            if inner_target:
+                return "", f"压缩包内未找到文件: {inner_target}"
             return "", "压缩包为空或解压失败"
 
-        # 优先级排序逻辑
-        def sort_priority(f_p):
-            b_n = os.path.basename(f_p).lower()
-            if b_n.startswith('readme') or '说明' in b_n:
-                return (0, 0, os.path.getsize(f_p))
-            elif b_n.endswith(('.txt', '.md')):
-                return (1, 0, os.path.getsize(f_p))
-            elif b_n.endswith(('.json', '.yaml', '.yml', '.toml', '.ini', '.conf', '.cfg')):
-                return (2, 0, os.path.getsize(f_p))
-            elif b_n.endswith(utils.SUPPORTED_TEXT_FORMATS):
-                return (3, 0, os.path.getsize(f_p))
-            else:
-                return (4, 0, os.path.getsize(f_p))
-
-        # 按优先级排序并寻找第一个可预览的文件
-        sorted_files = sorted(all_extracted_files, key=sort_priority)
+        # 2. 寻找预览文件
         preview_file_path = None
         
-        for f_path in sorted_files:
-            if f_path.lower().endswith(utils.SUPPORTED_TEXT_FORMATS):
-                preview_file_path = f_path
-                break
+        if inner_target:
+            if inner_target.isdigit():
+                # 按序号预览
+                idx = int(inner_target)
+                if 1 <= idx <= len(all_extracted_files):
+                    preview_file_path = all_extracted_files[idx-1]
+                    if not preview_file_path.lower().endswith(utils.SUPPORTED_TEXT_FORMATS):
+                        return "", f"❌ 内部文件 #{idx} 不支持预览格式。"
+                else:
+                    return "", f"❌ 内部序号错误！有效范围: 1-{len(all_extracted_files)}"
+            else:
+                # 寻找最接近的文件路径
+                for f_p in all_extracted_files:
+                    if f_p.replace(extract_path, "").strip(os.sep).replace(os.sep, "/") == inner_target.replace(os.sep, "/"):
+                        preview_file_path = f_p
+                        break
+                if not preview_file_path:
+                    # 模糊匹配
+                    for f_p in all_extracted_files:
+                        if inner_target.lower() in f_p.lower():
+                            preview_file_path = f_p
+                            break
+                if preview_file_path and not preview_file_path.lower().endswith(utils.SUPPORTED_TEXT_FORMATS):
+                    return "", f"❌ 指定的文件「{os.path.basename(preview_file_path)}」不支持预览格式。"
         
+        # 如果没有明确指定，且只有一个文件，且该文件支持预览，则自动预览
+        if not preview_file_path and len(all_extracted_files) == 1:
+            first_file = all_extracted_files[0]
+            if first_file.lower().endswith(utils.SUPPORTED_TEXT_FORMATS):
+                preview_file_path = first_file
+
         if not preview_file_path:
+            # 输出文件树
             file_structure = ["📦 压缩包内文件结构："]
-            for f_path in sorted(all_extracted_files):
+            for i, f_path in enumerate(all_extracted_files, 1):
                 relative_path = os.path.relpath(f_path, extract_path)
                 file_size = os.path.getsize(f_path)
                 size_str = utils.format_bytes(file_size)
-                depth = relative_path.count(os.sep)
-                indent = "  " * depth
-                file_name = os.path.basename(relative_path)
-                file_structure.append(f"{indent}├─ {file_name} ({size_str})")
+                # 使用 / 作为分隔符统一显示
+                display_path = relative_path.replace(os.sep, "/")
+                file_structure.append(f"[{i}] {display_path} ({size_str})")
             
+            file_structure.append("\n💡 提示：使用 /preview <序号> <内部序号> 预览特定文件。")
             structure_text = "\n".join(file_structure)
             return structure_text, None
         
+        # 3. 读取并解码内容
         with open(preview_file_path, 'rb') as f:
             content_bytes = f.read(preview_length * 4)
         
         preview_text_raw, encoding = await get_preview_from_bytes(content_bytes)
         
-        inner_file_name = os.path.relpath(preview_file_path, extract_path)
+        inner_file_name = os.path.relpath(preview_file_path, extract_path).replace(os.sep, "/")
         extra_info = f"已解压「{inner_file_name}」(格式 {encoding})"
         preview_text = f"{extra_info}\n{preview_text_raw}"
         
@@ -128,7 +157,7 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
     
     return preview_text, error_msg
 
-async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_password: str, preview_length: int, semaphore: asyncio.Semaphore, cleanup_fn) -> tuple[str, str | None]:
+async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_password: str, preview_length: int, semaphore: asyncio.Semaphore, cleanup_fn, inner_target: str = None) -> tuple[str, str | None]:
     file_id = file_info.get("file_id")
     file_name = file_info.get("file_name", "")
     _, file_extension = os.path.splitext(file_name)
@@ -140,7 +169,7 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
     if not (is_txt or is_archive):
         return "", f"❌ 文件「{file_name}」不是支持的文本或压缩格式，无法预览。"
         
-    logger.info(f"[{group_id}] 正在为文件 '{file_name}' (ID: {file_id}) 获取预览...")
+    logger.info(f"[{group_id}] 正在为文件 '{file_name}' (ID: {file_id}) 获取预览 (目标: {inner_target})...")
     
     local_file_path = None
     
@@ -164,7 +193,8 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
         async with aiohttp.ClientSession() as session:
             async with semaphore:
                 range_header = None
-                if is_txt:
+                # 如果是压缩包或指定了内部路径，不能使用 Range 下载，因为需要完整文件进行解压
+                if is_txt and not inner_target:
                     read_bytes_limit = preview_length * 4
                     range_header = {'Range': f'bytes=0-{read_bytes_limit - 1}'}
                 async with session.get(url, headers=range_header, timeout=30) as resp:
@@ -181,14 +211,16 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
         
         preview_content = ""
         error_msg = None
-        if is_txt:
+        if is_txt and not inner_target:
             decoded_text, _ = await get_preview_from_bytes(content_bytes)
             preview_content = decoded_text
         elif is_archive:
-            preview_text, error_msg = await get_preview_from_archive(local_file_path, default_zip_password, preview_length, cleanup_fn)
+            preview_text, error_msg = await get_preview_from_archive(local_file_path, default_zip_password, preview_length, cleanup_fn, inner_target)
             if error_msg:
                 return "", error_msg
             preview_content = preview_text
+        elif is_txt and inner_target:
+             return "", f"❌ 文本文件「{file_name}」不支持内部路径预览。"
         
         is_file_structure = preview_content.startswith("📦 压缩包内文件结构：")
         if not is_file_structure and len(preview_content) > preview_length:

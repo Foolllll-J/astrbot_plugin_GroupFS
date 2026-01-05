@@ -1,6 +1,3 @@
-# astrbot_plugin_GroupFS/main.py
-
-# 请确保已安装依赖: pip install croniter aiohttp chardet apscheduler
 import asyncio
 import os
 from typing import List, Dict, Optional
@@ -216,22 +213,53 @@ class GroupFSPlugin(Star):
         if not self.bot: self.bot = event.bot
         group_id = int(event.get_group_id())
         user_id = int(event.get_sender_id())
-        command_parts = event.message_str.split(maxsplit=2)
+        command_parts = event.message_str.split()
         
-        if len(command_parts) < 2 or not command_parts[1]:
+        if len(command_parts) < 2:
             await event.send(MessageChain([Comp.Plain("❓ 请提供要搜索的文件名。用法: /sf <文件名> [序号]")]))
             return
             
-        filename_to_find = command_parts[1]
-        index_str = command_parts[2] if len(command_parts) > 2 else None
-        
-        # 检查是否是翻页指令 (特殊处理：如果文件名是 'n' 且存在会话)
-        if filename_to_find.lower() == 'n':
-            session = self.session_mgr.get_session(group_id, user_id)
+        action = command_parts[1].lower()
+        session = self.session_mgr.get_session(group_id, user_id)
+
+        # 检查是否是翻页指令
+        if action in ['n', 'next']:
             if session:
                 await self._show_search_page(event, session, session.current_page + 1)
                 return
+            else:
+                await event.send(MessageChain([Comp.Plain("❌ 请先执行搜索。")]))
+                return
+        elif action in ['p', 'prev']:
+            if session:
+                await self._show_search_page(event, session, max(1, session.current_page - 1))
+                return
+            else:
+                await event.send(MessageChain([Comp.Plain("❌ 请先执行搜索。")]))
+                return
+        elif action == 'page' and len(command_parts) > 2:
+            if session:
+                try:
+                    target_page = int(command_parts[2])
+                    await self._show_search_page(event, session, target_page)
+                    return
+                except ValueError:
+                    pass
+            else:
+                await event.send(MessageChain([Comp.Plain("❌ 请先执行搜索。")]))
+                return
+        elif action.isdigit() and not session:
+             # 如果用户直接输入 /sf 1 但没有会话，提示搜索
+             await event.send(MessageChain([Comp.Plain("❌ 请先输入文件名进行搜索。")]))
+             return
+        elif action.isdigit() and session:
+            # 如果输入的是数字且有会话，执行跳转页面
+            await self._show_search_page(event, session, int(action))
+            return
 
+        filename_to_find = command_parts[1]
+        index_str = command_parts[2] if len(command_parts) > 2 else None
+        
         logger.info(f"[{group_id}] 用户 {user_id} 触发 /sf, 目标: '{filename_to_find}', 序号: {index_str}")
         
         # 检查是否有现有会话且关键词匹配
@@ -306,20 +334,29 @@ class GroupFSPlugin(Star):
         reply_text += "\n" + "-" * 20
         if page < total_pages:
             reply_text += f"\n输入 /sf n 查看下一页"
-        reply_text += f"\n如需预览/删除，请使用 /sf {session.keyword} [序号] 或 /df {session.keyword} [序号]"
+        if page > 1:
+            reply_text += f"\n输入 /sf p 查看上一页"
+        reply_text += f"\n输入 /sf page <页码> 跳转"
+        reply_text += f"\n\n💡 快速操作："
+        reply_text += f"\n• /preview <序号> - 预览文件"
+        reply_text += f"\n• /df <序号> - 删除文件"
         
         await self._send_or_forward(event, reply_text, name="文件搜索结果")
 
-    async def _handle_preview(self, event: AstrMessageEvent, file_to_preview: dict):
+    async def _handle_preview(self, event: AstrMessageEvent, file_to_preview: dict, inner_path: str = None):
         group_id = int(event.get_group_id())
         try:
-            preview_text, error_msg = await self._get_file_preview(event, file_to_preview)
+            preview_text, error_msg = await self._get_file_preview(event, file_to_preview, inner_path)
             if error_msg:
                 await event.send(MessageChain([Comp.Plain(error_msg)]))
                 return
             
+            title = f"📄 文件「{file_to_preview.get('file_name')}」内容预览"
+            if inner_path:
+                title += f" (内部路径: {inner_path})"
+            
             reply_text = (
-                f"📄 文件「{file_to_preview.get('file_name')}」内容预览：\n"
+                f"{title}：\n"
                 + "-" * 20 + "\n"
                 + preview_text
             )
@@ -328,100 +365,179 @@ class GroupFSPlugin(Star):
             logger.error(f"[{group_id}] 处理预览时发生未知异常: {e}", exc_info=True)
             await event.send(MessageChain([Comp.Plain("❌ 预览文件时发生内部错误，请检查后台日志。")]))
 
+    @filter.command("preview", alias={"预览"})
+    async def on_preview_command(self, event: AstrMessageEvent):
+        if not self.bot: self.bot = event.bot
+        group_id = int(event.get_group_id())
+        user_id = int(event.get_sender_id())
+        command_parts = event.message_str.split()
+        
+        if len(command_parts) < 2:
+            await event.send(MessageChain([Comp.Plain("❓ 用法: /preview <序号> [内部序号] 或 /preview <文件名> [序号] [内部序号]")]))
+            return
+            
+        arg1 = command_parts[1]
+        arg2 = command_parts[2] if len(command_parts) > 2 else None
+        session = self.session_mgr.get_session(group_id, user_id)
+        
+        # 场景 1: /preview <序号> [内部路径/序号]
+        if arg1.isdigit():
+            if not session:
+                await event.send(MessageChain([Comp.Plain("❌ 请先执行 /sf 搜索文件。")]))
+                return
+            index = int(arg1)
+            if 1 <= index <= session.total_count:
+                file_to_preview = session.results[index - 1]
+                inner_path = arg2
+                await self._handle_preview(event, file_to_preview, inner_path)
+            else:
+                await event.send(MessageChain([Comp.Plain(f"❌ 序号错误！有效范围: 1-{session.total_count}")]))
+            return
+            
+        # 场景 2: /preview <文件名> [序号] [内部路径]
+        filename_to_find = arg1
+        
+        # 搜索文件
+        all_files = await self._get_all_files_recursive_core(group_id, event.bot)
+        found_files = [f for f in all_files if filename_to_find in f.get('file_name', '')]
+        
+        if not found_files:
+            await event.send(MessageChain([Comp.Plain(f"❌ 未找到文件「{filename_to_find}」。")]))
+            return
+            
+        file_to_preview = None
+        inner_path = None
+
+        if arg2 and arg2.isdigit():
+            # /preview <文件名> <序号> [内部路径]
+            idx = int(arg2)
+            if 1 <= idx <= len(found_files):
+                file_to_preview = found_files[idx-1]
+                inner_path = command_parts[3] if len(command_parts) > 3 else None
+            else:
+                await event.send(MessageChain([Comp.Plain(f"❌ 序号错误！共找到 {len(found_files)} 个匹配文件。")]))
+                return
+        else:
+            # /preview <文件名> [内部路径]
+            if len(found_files) == 1:
+                file_to_preview = found_files[0]
+                inner_path = arg2
+            else:
+                # 多个结果，更新会话并显示
+                session = self.session_mgr.create_session(group_id, user_id, filename_to_find, found_files, 20)
+                await self._show_search_page(event, session, 1)
+                return
+
+        if file_to_preview:
+            await self._handle_preview(event, file_to_preview, inner_path)
+
     @filter.command("df")
     async def on_delete_file_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
         group_id = int(event.get_group_id())
         user_id = int(event.get_sender_id())
-        command_parts = event.message_str.split(maxsplit=2)
-        if len(command_parts) < 2 or not command_parts[1]:
-            await event.send(MessageChain([Comp.Plain("❓ 请提供要删除的文件名。用法: /df <文件名> [序号]")]))
+        command_parts = event.message_str.split()
+        
+        if len(command_parts) < 2:
+            await event.send(MessageChain([Comp.Plain("❓ 用法: /df <序号> 或 /df <文件名> [序号]")]))
             return
-        filename_to_find = command_parts[1]
-        index_str = command_parts[2] if len(command_parts) > 2 else None
-        logger.info(f"[{group_id}] 用户 {user_id} 触发删除指令 /df, 目标: '{filename_to_find}', 序号: {index_str}")
+            
         if user_id not in self.admin_users:
             await event.send(MessageChain([Comp.Plain("⚠️ 您没有执行此操作的权限。")]))
             return
 
-        # 尝试从会话中获取
+        target = command_parts[1]
         session = self.session_mgr.get_session(group_id, user_id)
+        
+        # 场景 1: /df <序号>
+        if target.isdigit():
+            if not session:
+                await event.send(MessageChain([Comp.Plain("❌ 请先执行 /sf 搜索文件。")]))
+                return
+            index = int(target)
+            if 1 <= index <= session.total_count:
+                file_to_delete = session.results[index - 1]
+                await self._perform_single_delete(event, file_to_delete, session)
+            else:
+                await event.send(MessageChain([Comp.Plain(f"❌ 序号错误！有效范围: 1-{session.total_count}")]))
+            return
+            
+        # 场景 2: /df <文件名> [序号/0/批量序号]
+        filename_to_find = target
+        index_str = command_parts[2] if len(command_parts) > 2 else None
+        
+        # 优先使用会话缓存
         found_files = []
         if session and session.keyword == filename_to_find:
             found_files = session.results
         else:
             all_files = await self._get_all_files_recursive_core(group_id, event.bot)
-            for file_info in all_files:
-                current_filename = file_info.get('file_name', '')
-                base_name, _ = os.path.splitext(current_filename)
-                if filename_to_find in base_name or filename_to_find in current_filename:
-                    found_files.append(file_info)
+            found_files = [f for f in all_files if filename_to_find in f.get('file_name', '')]
 
-        logger.info(f"[{group_id}] 在搜索中找到 {len(found_files)} 个匹配项用于删除。")
-            
         if not found_files:
-            await event.send(MessageChain([Comp.Plain(f"❌ 未找到与「{filename_to_find}」相关的任何文件。")]))
-            return
-            
-        if index_str == '0':
-            self.active_tasks.append(asyncio.create_task(self._perform_batch_delete(event, found_files)))
-            event.stop_event()
+            await event.send(MessageChain([Comp.Plain(f"❌ 未找到文件「{filename_to_find}」。")]))
             return
 
-        file_to_delete = None
-        if len(found_files) == 1 and not index_str:
-            file_to_delete = found_files[0]
-        elif index_str:
-            try:
-                index = int(index_str)
-                if 1 <= index <= len(found_files):
-                    file_to_delete = found_files[index - 1]
-                else:
-                    await event.send(MessageChain([Comp.Plain(f"❌ 序号错误！找到了 {len(found_files)} 个文件，请输入 1 到 {len(found_files)} 之间的数字。")]))
-                    return
-            except ValueError:
-                await event.send(MessageChain([Comp.Plain("❌ 序号必须是一个数字。")]))
+        # 批量删除 (/df <文件名> 0) 或 (/df <文件名> 1,2,3)
+        if index_str:
+            if index_str == '0':
+                self.active_tasks.append(asyncio.create_task(self._perform_batch_delete(event, found_files)))
                 return
+            elif ',' in index_str:
+                try:
+                    indices = [int(i.strip()) for i in index_str.split(',') if i.strip().isdigit()]
+                    files_to_delete = []
+                    for idx in indices:
+                        if 1 <= idx <= len(found_files):
+                            files_to_delete.append(found_files[idx-1])
+                    if files_to_delete:
+                        self.active_tasks.append(asyncio.create_task(self._perform_batch_delete(event, files_to_delete)))
+                        return
+                except ValueError:
+                    pass
+
+        if len(found_files) == 1 and not index_str:
+            await self._perform_single_delete(event, found_files[0], session)
+        elif index_str and index_str.isdigit():
+            idx = int(index_str)
+            if 1 <= idx <= len(found_files):
+                await self._perform_single_delete(event, found_files[idx-1], session)
+            else:
+                await event.send(MessageChain([Comp.Plain(f"❌ 序号错误！共找到 {len(found_files)} 个文件。")]))
         else:
-            # 如果没提供序号且有多个结果，创建/更新会话并显示结果
+            # 多个结果，更新会话并显示
             session = self.session_mgr.create_session(group_id, user_id, filename_to_find, found_files, self.search_results_per_page)
             await self._show_search_page(event, session, 1)
-            return
 
-        if not file_to_delete:
-            await event.send(MessageChain([Comp.Plain("❌ 内部错误，未能确定要删除的文件。")]))
-            return
+    async def _perform_single_delete(self, event: AstrMessageEvent, file_info: dict, session=None):
+        group_id = int(event.get_group_id())
+        file_name = file_info.get("file_name")
+        file_id = file_info.get("file_id")
         
+        if not file_id:
+            await event.send(MessageChain([Comp.Plain(f"❌ 无法获取文件「{file_name}」的ID。")]))
+            return
+            
         try:
-            file_id_to_delete = file_to_delete.get("file_id")
-            found_filename = file_to_delete.get("file_name")
-            if not file_id_to_delete:
-                await event.send(MessageChain([Comp.Plain(f"❌ 找到文件「{found_filename}」，但无法获取其ID，删除失败。")]))
-                return
-            logger.info(f"[{group_id}] 确认删除文件 '{found_filename}', File ID: {file_id_to_delete}...")
-            client = event.bot
-            delete_result = await client.api.call_action('delete_group_file', group_id=group_id, file_id=file_id_to_delete)
+            delete_result = await event.bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
             is_success = False
             if delete_result:
                 trans_result = delete_result.get('transGroupFileResult', {})
                 result_obj = trans_result.get('result', {})
                 if result_obj.get('retCode') == 0:
                     is_success = True
+            
             if is_success:
-                await event.send(MessageChain([Comp.Plain(f"✅ 文件「{found_filename}」已成功删除。")]))
-                logger.info(f"[{group_id}] 文件 '{found_filename}' 已成功删除。")
-                # 删除成功后，如果会话存在，从会话中移除
-                if session and session.keyword == filename_to_find:
-                    session.results.remove(file_to_delete)
+                await event.send(MessageChain([Comp.Plain(f"✅ 文件「{file_name}」已成功删除。")]))
+                if session and file_info in session.results:
+                    session.results.remove(file_info)
                     session.total_count = len(session.results)
-                    if session.total_count == 0:
-                        self.session_mgr.clear_session(group_id, user_id)
             else:
-                error_msg = delete_result.get('wording', 'API未返回成功状态')
-                await event.send(MessageChain([Comp.Plain(f"❌ 删除文件「{found_filename}」失败: {error_msg}")]))
+                wording = delete_result.get('wording', 'API未返回成功状态')
+                await event.send(MessageChain([Comp.Plain(f"❌ 删除文件「{file_name}」失败：{wording}")]))
         except Exception as e:
-            logger.error(f"[{group_id}] 处理删除流程时发生未知异常: {e}", exc_info=True)
-            await event.send(MessageChain([Comp.Plain(f"❌ 处理删除时发生内部错误，请检查后台日志。")]))
+            logger.error(f"[{group_id}] 删除文件时出错: {e}", exc_info=True)
+            await event.send(MessageChain([Comp.Plain(f"❌ 删除文件「{file_name}」时发生内部错误。")]))
 
     async def _perform_batch_delete(self, event: AstrMessageEvent, files_to_delete: List[Dict]):
         await perform_batch_delete(event, files_to_delete, self.forward_threshold)
@@ -429,7 +545,7 @@ class GroupFSPlugin(Star):
     async def _cleanup_folder(self, path: str):
         await cleanup_folder(path)
 
-    async def _get_file_preview(self, event: AstrMessageEvent, file_info: dict) -> tuple[str, str | None]:
+    async def _get_file_preview(self, event: AstrMessageEvent, file_info: dict, inner_path: str = None) -> tuple[str, str | None]:
         return await get_file_preview(
             int(event.get_group_id()), 
             file_info, 
@@ -437,7 +553,8 @@ class GroupFSPlugin(Star):
             self.default_zip_password, 
             self.preview_length, 
             self.download_semaphore,
-            self._cleanup_folder
+            self._cleanup_folder,
+            inner_path
         )
 
     async def _create_zip_archive(self, source_dir: str, target_zip_path: str, password: str) -> bool:
