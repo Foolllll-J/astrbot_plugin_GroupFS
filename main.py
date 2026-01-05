@@ -105,11 +105,70 @@ class GroupFSPlugin(Star):
         logger.info("插件 [群文件系统GroupFS] 已加载。")
 
     async def initialize(self):
+        # 尝试从 platform_manager 自动获取 bot 实例
+        if hasattr(self.context, "platform_manager"):
+            try:
+                platforms = self.context.platform_manager.get_insts()
+                for platform in platforms:
+                    bot_client = None
+                    if hasattr(platform, "get_client"):
+                        bot_client = platform.get_client()
+                    elif hasattr(platform, "bot"):
+                        bot_client = platform.bot
+                    
+                    if bot_client:
+                        self.bot = bot_client
+                        logger.info(f"[初始化] 成功从 platform_manager 获取 bot 实例")
+                        break
+            except Exception as e:
+                logger.warning(f"[初始化] 从 platform_manager 获取 bot 实例失败: {e}")
+        
+        # 启动定时任务
         if self.cron_configs:
-            logger.info("[定时任务] 启动失效文件检查调度器...")
-            self.scheduler = AsyncIOScheduler()
-            self._register_jobs()
-            self.scheduler.start()
+            if self.bot:
+                # 如果已经获取到 bot，直接启动调度器，不需要等待 30 秒
+                logger.info("[定时任务] 启动失效文件检查调度器...")
+                self.scheduler = AsyncIOScheduler()
+                self._register_jobs()
+                self.scheduler.start()
+            else:
+                # 只有在没获取到 bot 的情况下，才进入延迟启动流程
+                logger.warning("[初始化] 未能立即获取 bot 实例，将通过延迟任务捕获并启动调度器。")
+                asyncio.create_task(self._delayed_start_scheduler())
+
+    async def _delayed_start_scheduler(self):
+        """延迟启动调度器，等待系统初始化并尝试再次获取 bot"""
+        try:
+            # 等待 30 秒让系统完全初始化
+            await asyncio.sleep(30)
+            
+            # 再次尝试获取 bot
+            if not self.bot and hasattr(self.context, "platform_manager"):
+                platforms = self.context.platform_manager.get_insts()
+                for platform in platforms:
+                    bot_client = None
+                    if hasattr(platform, "get_client"):
+                        bot_client = platform.get_client()
+                    elif hasattr(platform, "bot"):
+                        bot_client = platform.bot
+                    
+                    if bot_client:
+                        self.bot = bot_client
+                        logger.info("[定时任务] 延迟启动过程中成功补获 bot 实例")
+                        break
+            
+            # 启动调度器
+            if not self.scheduler:
+                logger.info("[定时任务] 延迟启动调度器...")
+                self.scheduler = AsyncIOScheduler()
+                self._register_jobs()
+                self.scheduler.start()
+            
+            if not self.bot:
+                logger.warning("[定时任务] 调度器已启动，但尚未获取到 bot 实例。")
+                
+        except Exception as e:
+            logger.error(f"[定时任务] 延迟启动失败: {e}", exc_info=True)
 
     def _register_jobs(self):
         """根据配置注册定时任务"""
@@ -143,6 +202,10 @@ class GroupFSPlugin(Star):
 
     async def _apscheduler_check_task(self, group_id: int, auto_delete: bool):
         """APScheduler 调用的包装函数，负责消费生成器并发送消息"""
+        if not self.bot:
+            logger.warning(f"[{group_id}] [定时任务] 无法执行，因为尚未捕获到 bot 实例。")
+            return
+
         async for msg in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, self.scheduled_autodelete):
             if self.bot:
                 await self.bot.api.call_action('send_group_msg', group_id=group_id, message=msg)
