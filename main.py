@@ -18,7 +18,8 @@ from .src.file_ops import (
     create_zip_archive, 
     cleanup_folder, 
     cleanup_backup_temp,
-    get_all_files_recursive_core
+    get_all_files_recursive_core,
+    rename_group_file
 )
 from .src.preview_utils import get_file_preview
 from .src.utils import send_or_forward
@@ -167,7 +168,11 @@ class GroupFSPlugin(Star):
     @filter.command("cdf")
     async def on_check_and_delete_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
-        group_id = int(event.get_group_id())
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            await event.send(MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")]))
+            return
+        group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         logger.info(f"[{group_id}] 用户 {user_id} 触发 /cdf 失效文件清理指令。")
         if user_id not in self.admin_users:
@@ -183,7 +188,11 @@ class GroupFSPlugin(Star):
     @filter.command("cf")
     async def on_check_files_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
-        group_id = int(event.get_group_id())
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            await event.send(MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")]))
+            return
+        group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         if user_id not in self.admin_users:
             await event.send(MessageChain([Comp.Plain("⚠️ 您没有执行此操作的权限。")]))
@@ -196,10 +205,13 @@ class GroupFSPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=10)
     async def on_group_file_upload(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
-        has_file = any(isinstance(seg, Comp.File) for seg in event.get_messages())
-        if has_file:
+        file_component = next((seg for seg in event.get_messages() if isinstance(seg, Comp.File)), None)
+        if file_component:
             group_id = int(event.get_group_id())
-            logger.info(f"[{group_id}] 检测到文件上传事件，将在5秒后触发容量检查。")
+            file_id = getattr(file_component, 'file_id', None)
+            file_name = getattr(file_component, 'file_name', None) or getattr(file_component, 'name', None)
+            
+            logger.info(f"[{group_id}] 检测到文件上传事件: {file_name} ({file_id})，将在5秒后触发容量检查。")
             self.active_tasks.append(asyncio.create_task(self._check_storage_and_notify(event)))
 
     async def _check_storage_and_notify(self, event: AstrMessageEvent):
@@ -211,7 +223,11 @@ class GroupFSPlugin(Star):
     @filter.command("sf")
     async def on_search_file_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
-        group_id = int(event.get_group_id())
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            await event.send(MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")]))
+            return
+        group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
         
@@ -324,8 +340,12 @@ class GroupFSPlugin(Star):
         
         start_idx = (page - 1) * session.page_size + 1
         for i, file_info in enumerate(results, start_idx):
+            parent_folder = file_info.get('parent_folder_name', '根目录')
+            path_display = f"\n  路径: {parent_folder}/" if parent_folder != '根目录' else ""
+            
             reply_text += (
                 f"\n[{i}] {file_info.get('file_name')}"
+                f"{path_display}"
                 f"\n  上传者: {file_info.get('uploader_name', '未知')}"
                 f"\n  大小: {utils.format_bytes(file_info.get('size'))}"
                 f"\n  修改时间: {utils.format_timestamp(file_info.get('modify_time'))}"
@@ -368,18 +388,35 @@ class GroupFSPlugin(Star):
     @filter.command("preview", alias={"预览"})
     async def on_preview_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
-        group_id = int(event.get_group_id())
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            await event.send(MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")]))
+            return
+        group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
         
+        # 检查是否引用了文件
+        quoted_file = await self._resolve_file_from_message(event)
+
         if len(command_parts) < 2:
-            await event.send(MessageChain([Comp.Plain("❓ 用法: /preview <序号> [内部序号] 或 /preview <文件名> [序号] [内部序号]")]))
+            if quoted_file:
+                # 引用预览：/预览
+                await self._handle_preview(event, quoted_file)
+                return
+            await event.send(MessageChain([Comp.Plain("❓ 用法: /preview <序号> [内部序号] 或 /preview <文件名> [序号] [内部序号] 或 引用文件消息后输入 /preview")]))
             return
             
         arg1 = command_parts[1]
         arg2 = command_parts[2] if len(command_parts) > 2 else None
         session = self.session_mgr.get_session(group_id, user_id)
         
+        # 场景 0: 引用预览且带内部路径/序号：引用文件后输入 /预览 1
+        if quoted_file and arg1:
+            # 如果 arg1 是数字且不是文件名，尝试作为内部路径预览
+            await self._handle_preview(event, quoted_file, arg1)
+            return
+
         # 场景 1: /preview <序号> [内部路径/序号]
         if arg1.isdigit():
             if not session:
@@ -434,18 +471,28 @@ class GroupFSPlugin(Star):
     @filter.command("df")
     async def on_delete_file_command(self, event: AstrMessageEvent):
         if not self.bot: self.bot = event.bot
-        group_id = int(event.get_group_id())
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            await event.send(MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")]))
+            return
+        group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
         
-        if len(command_parts) < 2:
-            await event.send(MessageChain([Comp.Plain("❓ 用法: /df <序号> 或 /df <文件名> [序号]")]))
-            return
-            
         if user_id not in self.admin_users:
             await event.send(MessageChain([Comp.Plain("⚠️ 您没有执行此操作的权限。")]))
             return
 
+        # 检查是否引用了文件
+        quoted_file = await self._resolve_file_from_message(event)
+        
+        if len(command_parts) < 2:
+            if quoted_file:
+                await self._perform_single_delete(event, quoted_file)
+                return
+            await event.send(MessageChain([Comp.Plain("❓ 用法: /df <序号> 或 /df <文件名> [序号] 或 引用文件消息后输入 /df")]))
+            return
+            
         target = command_parts[1]
         session = self.session_mgr.get_session(group_id, user_id)
         
@@ -508,6 +555,144 @@ class GroupFSPlugin(Star):
             # 多个结果，更新会话并显示
             session = self.session_mgr.create_session(group_id, user_id, filename_to_find, found_files, self.search_results_per_page)
             await self._show_search_page(event, session, 1)
+
+    @filter.command("rn", alias={"重命名"})
+    async def on_rename_command(self, event: AstrMessageEvent):
+        if not self.bot: self.bot = event.bot
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            await event.send(MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")]))
+            return
+        group_id = int(group_id_str)
+        user_id = int(event.get_sender_id())
+        command_parts = event.message_str.split()
+        
+        # 权限校验
+        if user_id not in self.admin_users:
+            await event.send(MessageChain([Comp.Plain("⚠️ 您没有执行此操作的权限。")]))
+            return
+
+        # 解析引用的文件
+        quoted_file = await self._resolve_file_from_message(event)
+
+        file_to_rename = None
+        session = None
+        new_name = None
+
+        if quoted_file:
+            if len(command_parts) < 2:
+                await event.send(MessageChain([Comp.Plain("❓ 用法: 引用文件后输入 /重命名 <新文件名>")]))
+                return
+            file_to_rename = quoted_file
+            new_name = command_parts[1]
+            logger.info(f"[/rn] 使用引用文件: {file_to_rename['file_name']} -> {new_name}")
+        else:
+            if len(command_parts) < 3:
+                await event.send(MessageChain([Comp.Plain("❓ 用法: /rn <序号> <新文件名> 或 /rn <旧文件名> <新文件名>")]))
+                return
+            
+            target = command_parts[1]
+            new_name = command_parts[2]
+            session = self.session_mgr.get_session(group_id, user_id)
+            
+            # 场景 1: /rn <序号> <新名称>
+            if target.isdigit():
+                if not session:
+                    await event.send(MessageChain([Comp.Plain("❌ 请先执行 /sf 搜索文件。")]))
+                    return
+                index = int(target)
+                if 1 <= index <= session.total_count:
+                    file_to_rename = session.results[index - 1]
+                else:
+                    await event.send(MessageChain([Comp.Plain(f"❌ 序号错误！有效范围: 1-{session.total_count}")]))
+                    return
+            else:
+                # 场景 2: /rn <旧文件名> <新名称>
+                all_files = await self._get_all_files_recursive_core(group_id, event.bot)
+                found_files = [f for f in all_files if target == f.get('file_name', '')]
+                
+                if not found_files:
+                    # 模糊匹配
+                    found_files = [f for f in all_files if target in f.get('file_name', '')]
+                
+                if not found_files:
+                    await event.send(MessageChain([Comp.Plain(f"❌ 未找到文件「{target}」。")]))
+                    return
+                
+                if len(found_files) == 1:
+                    file_to_rename = found_files[0]
+                else:
+                    # 多个结果，更新会话并提示
+                    session = self.session_mgr.create_session(group_id, user_id, target, found_files, 20)
+                    await self._show_search_page(event, session, 1)
+                    await event.send(MessageChain([Comp.Plain(f"💡 找到多个匹配文件，请使用 /rn <序号> {new_name} 来指定。")]))
+                    return
+
+        if file_to_rename:
+            old_name = file_to_rename.get("file_name")
+            file_id = file_to_rename.get("file_id")
+            parent_id = file_to_rename.get("parent_id", "/") 
+            
+            success, message = await rename_group_file(
+                self.bot, 
+                group_id, 
+                file_id, 
+                parent_id, 
+                new_name
+            )
+            
+            if success:
+                await event.send(MessageChain([Comp.Plain(f"✅ 文件重命名成功：\n「{old_name}」\n  ➡️ 「{new_name}」")]))
+                # 更新会话中的缓存
+                if session and file_to_rename in session.results:
+                    file_to_rename["file_name"] = new_name
+            else:
+                await event.send(MessageChain([Comp.Plain(f"❌ 重命名失败：{message}")]))
+
+    async def _resolve_file_from_message(self, event: AstrMessageEvent) -> Optional[Dict]:
+        """
+        参考 filechecker 逻辑：从消息（尤其是引用消息）中解析并获取云端真实有效的群文件信息。
+        """
+        group_id = int(event.get_group_id())
+        messages = event.get_messages()
+        
+        file_name_in_msg = None
+        msg_file_id = None
+        
+        for seg in messages:
+            if isinstance(seg, Comp.Reply):
+                reply_chain = getattr(seg, 'chain', None)
+                if reply_chain and isinstance(reply_chain, list):
+                    for reply_seg in reply_chain:
+                        if isinstance(reply_seg, Comp.File):
+                            file_name_in_msg = getattr(reply_seg, "file_name", None) or getattr(reply_seg, "name", None)
+                            msg_file_id = getattr(reply_seg, "file_id", None)
+                            break
+                if file_name_in_msg: break
+            elif isinstance(seg, Comp.File):
+                # 直接消息中的文件
+                file_name_in_msg = getattr(seg, "file_name", None) or getattr(seg, "name", None)
+                msg_file_id = getattr(seg, "file_id", None)
+                break
+                
+        if not file_name_in_msg:
+            return None
+            
+        logger.info(f"尝试解析消息中的文件 '{file_name_in_msg}' (ID: {msg_file_id})...")
+        all_files = await self._get_all_files_recursive_core(group_id, self.bot)
+        
+        # 1. 尝试通过 ID 匹配
+        if msg_file_id:
+            target = next((f for f in all_files if f.get('file_id') == msg_file_id), None)
+            if target:
+                return target
+                
+        # 2. 尝试通过文件名全名匹配
+        target = next((f for f in all_files if f.get('file_name') == file_name_in_msg), None)
+        if target:
+            return target
+            
+        return None
 
     async def _perform_single_delete(self, event: AstrMessageEvent, file_info: dict, session=None):
         group_id = int(event.get_group_id())
@@ -575,6 +760,11 @@ class GroupFSPlugin(Star):
     @filter.command("ddf")
     async def on_detect_duplicates_command(self, event: AstrMessageEvent):
         """检测群文件中的重复文件（使用LLM分析）"""
+        if not self.bot: self.bot = event.bot
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            yield MessageChain([Comp.Plain("❌ 此指令只能在群聊中使用。")])
+            return
         
         async for result in detect_duplicates(
             event, 
