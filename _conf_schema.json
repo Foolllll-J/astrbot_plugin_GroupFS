@@ -17,12 +17,6 @@
         "type": "int",
         "default": 300
     },
-    "enable_zip_preview": {
-        "description": "启用ZIP压缩包预览",
-        "hint": "开启后，使用 /sf ... <序号> 可预览ZIP包内第一个TXT文件的内容。",
-        "type": "bool",
-        "default": true
-    },
     "default_zip_password": {
         "description": "默认ZIP解压密码",
         "hint": "在预览加密的ZIP压缩包时，会尝试使用此密码进行解压。",

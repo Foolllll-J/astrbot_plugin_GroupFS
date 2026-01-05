@@ -22,8 +22,8 @@ async def get_preview_from_bytes(content_bytes: bytes) -> tuple[str, str]:
     except Exception:
         return "", "未知"
 
-async def get_preview_from_zip(file_path: str, default_zip_password: str, preview_length: int, cleanup_fn) -> tuple[str, str]:
-    """从本地压缩文件中解压并预览第一个文本文件。返回 (预览内容, 错误信息)。"""
+async def get_preview_from_archive(file_path: str, default_zip_password: str, preview_length: int, cleanup_fn) -> tuple[str, str]:
+    """从本地压缩文件中解压并预览最合适的文本文件。支持多种格式。"""
     temp_dir = os.path.join(StarTools.get_data_dir('astrbot_plugin_GroupFS'), 'temp_file_previews')
     os.makedirs(temp_dir, exist_ok=True)
     extract_path = os.path.join(temp_dir, f"extract_{int(time.time())}")
@@ -54,11 +54,11 @@ async def get_preview_from_zip(file_path: str, default_zip_password: str, previe
                 stdout, stderr = await process.communicate()
                 
                 if process.returncode != 0:
-                    error_msg = stderr.decode('utf-8').strip()
+                    error_msg = stderr.decode('utf-8', errors='ignore').strip()
                     logger.error(f"使用默认密码解压失败: {error_msg}")
                     error_msg = "解压失败，可能密码不正确"
             else:
-                error_msg = stderr.decode('utf-8').strip()
+                error_msg = stderr.decode('utf-8', errors='ignore').strip()
                 logger.error(f"使用 7za 命令解压失败且未设置默认密码: {error_msg}")
                 error_msg = "解压失败，可能文件已加密"
         
@@ -66,17 +66,34 @@ async def get_preview_from_zip(file_path: str, default_zip_password: str, previe
             return "", error_msg
 
         all_extracted_files = [os.path.join(dirpath, f) for dirpath, _, filenames in os.walk(extract_path) for f in filenames]
+        
+        if not all_extracted_files:
+            return "", "压缩包为空或解压失败"
+
+        # 优先级排序逻辑
+        def sort_priority(f_p):
+            b_n = os.path.basename(f_p).lower()
+            if b_n.startswith('readme') or '说明' in b_n:
+                return (0, 0, os.path.getsize(f_p))
+            elif b_n.endswith(('.txt', '.md')):
+                return (1, 0, os.path.getsize(f_p))
+            elif b_n.endswith(('.json', '.yaml', '.yml', '.toml', '.ini', '.conf', '.cfg')):
+                return (2, 0, os.path.getsize(f_p))
+            elif b_n.endswith(utils.SUPPORTED_TEXT_FORMATS):
+                return (3, 0, os.path.getsize(f_p))
+            else:
+                return (4, 0, os.path.getsize(f_p))
+
+        # 按优先级排序并寻找第一个可预览的文件
+        sorted_files = sorted(all_extracted_files, key=sort_priority)
         preview_file_path = None
         
-        for f_path in all_extracted_files:
-            if f_path.lower().endswith('.txt'):
+        for f_path in sorted_files:
+            if f_path.lower().endswith(utils.SUPPORTED_TEXT_FORMATS):
                 preview_file_path = f_path
                 break
         
         if not preview_file_path:
-            if not all_extracted_files:
-                return "", "压缩包为空或解压失败"
-            
             file_structure = ["📦 压缩包内文件结构："]
             for f_path in sorted(all_extracted_files):
                 relative_path = os.path.relpath(f_path, extract_path)
@@ -103,7 +120,7 @@ async def get_preview_from_zip(file_path: str, default_zip_password: str, previe
         logger.error("解压失败：容器内未找到 7za 命令。")
         error_msg = "解压失败：未安装 7za"
     except Exception as e:
-        logger.error(f"处理ZIP文件时发生未知错误: {e}", exc_info=True)
+        logger.error(f"处理压缩文件时发生未知错误: {e}", exc_info=True)
         error_msg = "处理压缩文件时发生内部错误"
     finally:
         if os.path.exists(extract_path):
@@ -111,15 +128,16 @@ async def get_preview_from_zip(file_path: str, default_zip_password: str, previe
     
     return preview_text, error_msg
 
-async def get_file_preview(group_id: int, file_info: dict, bot, enable_zip_preview: bool, default_zip_password: str, preview_length: int, semaphore: asyncio.Semaphore, cleanup_fn) -> tuple[str, str | None]:
+async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_password: str, preview_length: int, semaphore: asyncio.Semaphore, cleanup_fn) -> tuple[str, str | None]:
     file_id = file_info.get("file_id")
     file_name = file_info.get("file_name", "")
     _, file_extension = os.path.splitext(file_name)
+    file_extension = file_extension.lower()
     
-    is_txt = file_extension.lower() == '.txt'
-    is_zip = enable_zip_preview and file_extension.lower() == '.zip'
+    is_txt = file_extension in utils.SUPPORTED_TEXT_FORMATS
+    is_archive = file_extension in utils.SUPPORTED_ARCHIVE_FORMATS
     
-    if not (is_txt or is_zip):
+    if not (is_txt or is_archive):
         return "", f"❌ 文件「{file_name}」不是支持的文本或压缩格式，无法预览。"
         
     logger.info(f"[{group_id}] 正在为文件 '{file_name}' (ID: {file_id}) 获取预览...")
@@ -166,8 +184,8 @@ async def get_file_preview(group_id: int, file_info: dict, bot, enable_zip_previ
         if is_txt:
             decoded_text, _ = await get_preview_from_bytes(content_bytes)
             preview_content = decoded_text
-        elif is_zip:
-            preview_text, error_msg = await get_preview_from_zip(local_file_path, default_zip_password, preview_length, cleanup_fn)
+        elif is_archive:
+            preview_text, error_msg = await get_preview_from_archive(local_file_path, default_zip_password, preview_length, cleanup_fn)
             if error_msg:
                 return "", error_msg
             preview_content = preview_text

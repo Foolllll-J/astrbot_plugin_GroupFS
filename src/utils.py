@@ -52,10 +52,17 @@ def parse_date_param(date_str: str) -> Optional[int]:
     return None
 
 # --- 常量：定义支持预览的文件扩展名列表 ---
-SUPPORTED_PREVIEW_EXTENSIONS = (
+SUPPORTED_TEXT_FORMATS = (
     '.txt', '.md', '.json', '.xml', '.html', '.css', 
     '.js', '.py', '.java', '.c', '.cpp', '.h', '.hpp', 
-    '.go', '.rs', '.rb', '.php', '.log', '.ini', '.yml', '.yaml'
+    '.go', '.rs', '.rb', '.php', '.log', '.ini', '.yml', '.yaml',
+    '.toml', '.conf', '.cfg', '.sh', '.bat', '.ps1', '.sql',
+    '.csv', '.tsv', '.env', '.dockerfile', '.gitignore'
+)
+
+SUPPORTED_ARCHIVE_FORMATS = (
+    '.zip', '.7z', '.tar', '.gz', '.bz2', '.xz',
+    '.iso', '.wim', '.rar'
 )
 
 # --- 辅助函数：将文本按指定长度分割 ---
