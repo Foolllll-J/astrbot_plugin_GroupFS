@@ -7,15 +7,15 @@
     },
     "admin_users": {
         "description": "管理员QQ列表",
-        "hint": "只有在此列表中的用户才有权限使用 /df, /gfb 等管理指令。为了安全，强烈建议配置此项！",
+        "hint": "只有在此列表中的用户才有权限使用 /删除, /备份群文件 等管理指令。为了安全，强烈建议配置此项！",
         "type": "list",
         "default": []
     },
     "preview_length": {
         "description": "文本预览长度 (字符)",
-        "hint": "使用 /sf 文件名 <序号> 指令时，显示的内容预览的最大字符数。",
+        "hint": "使用 /搜索 文件名 <序号> 指令时，显示的内容预览的最大字符数。",
         "type": "int",
-        "default": 300
+        "default": 1000
     },
     "default_zip_password": {
         "description": "默认ZIP解压密码",
@@ -40,12 +40,6 @@
         "hint": "开启后，定时任务检测到失效文件将直接删除，而不是只发送报告。默认只报告，不删除。",
         "type": "bool",
         "default": false
-    },
-    "forward_threshold": {
-        "description": "长消息合并转发阈值 (字符)",
-        "hint": "当插件的单条回复超过此字数时，将自动转为合并转发。设置为 0 则禁用此功能。",
-        "type": "int",
-        "default": 0
     },
     "backup_zip_password": {
         "description": "备份压缩包加密密码",

@@ -13,8 +13,7 @@ async def detect_duplicates(
     admin_users: List[int],
     group_whitelist: List[int],
     get_all_files_fn, # 传入获取全量文件的函数
-    text_to_image_fn, # 传入文字转图片的函数
-    send_or_forward_fn # 传入发送或转发的函数
+    text_to_image_fn # 传入文字转图片的函数
 ):
     """检测群文件中的重复文件（使用LLM分析）"""
     user_id = int(event.get_sender_id())
@@ -22,11 +21,6 @@ async def detect_duplicates(
     
     if not group_id:
         yield event.plain_result("❌ 此指令仅可在群聊中使用。")
-        return
-    
-    # 权限校验
-    if user_id not in admin_users:
-        yield event.plain_result("⚠️ 您没有执行重复文件检测的权限。")
         return
     
     # 白名单校验
@@ -131,7 +125,7 @@ async def detect_duplicates(
         except Exception as img_error:
             logger.warning(f"文本转图片失败: {img_error}，将发送纯文本结果")
             # 如果转图失败，降级为发送文本
-            await send_or_forward_fn(event, response_text, "重复文件检测")
+            yield event.plain_result(response_text)
         
     except Exception as e:
         logger.error(f"检测重复文件失败: {e}", exc_info=True)

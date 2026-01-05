@@ -6,7 +6,6 @@ import astrbot.api.message_components as Comp
 from aiocqhttp.exceptions import ActionFailed
 from . import utils
 from .file_ops import get_all_files_recursive_core
-from .utils import send_or_forward
 
 async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage_limits: Dict[int, Dict], scheduled_autodelete: bool):
     """统一的定时检查函数，根据auto_delete决定是否删除。"""
@@ -89,13 +88,13 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
         
         logger.info(f"[{group_id}] {log_prefix} 检查全部完成，准备发送报告。")
         if bot:
-            await bot.api.call_action('send_group_msg', group_id=group_id, message=report_message)
+            yield report_message
     except Exception as e:
         logger.error(f"[{group_id}] {log_prefix} 执行过程中发生未知异常: {e}", exc_info=True)
         if bot:
-            await bot.api.call_action('send_group_msg', group_id=group_id, message="❌ 定时任务执行过程中发生内部错误，请检查后台日志。")
+            yield "❌ 定时任务执行过程中发生内部错误，请检查后台日志。"
 
-async def perform_batch_check_and_delete(event: AstrMessageEvent, forward_threshold: int):
+async def perform_batch_check_and_delete(event: AstrMessageEvent):
     group_id = int(event.get_group_id())
     bot = event.bot
     try:
@@ -152,12 +151,12 @@ async def perform_batch_check_and_delete(event: AstrMessageEvent, forward_thresh
             report_message += f"\n\n🚨 有 {len(failed_deletions)} 个失效文件删除失败，可能需要手动处理：\n"
             report_message += "\n".join(f"- {name}" for name in failed_deletions)
         logger.info(f"[{group_id}] [批量清理] 检查全部完成，准备发送报告。")
-        await send_or_forward(event, report_message, forward_threshold, name="失效文件清理报告")
+        yield event.plain_result(report_message)
     except Exception as e:
         logger.error(f"[{group_id}] [批量清理] 执行过程中发生未知异常: {e}", exc_info=True)
-        await event.send(MessageChain([Comp.Plain("❌ 在执行批量清理时发生内部错误，请检查后台日志。")]))
+        yield event.plain_result("❌ 在执行批量清理时发生内部错误，请检查后台日志。")
 
-async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Dict], forward_threshold: int):
+async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Dict]):
     group_id = int(event.get_group_id())
     deleted_files = []
     failed_deletions = []
@@ -196,7 +195,7 @@ async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Di
         report_message += f"\n\n🚨 有 {len(failed_deletions)} 个文件删除失败：\n"
         report_message += "\n".join(f"- {name}" for name in failed_deletions)
     logger.info(f"[{group_id}] [批量删除] 任务完成，准备发送报告。")
-    await send_or_forward(event, report_message, forward_threshold, name="批量删除报告")
+    yield event.plain_result(report_message)
 
 async def check_storage_and_notify(event: AstrMessageEvent, storage_limits: Dict[int, Dict]):
     group_id = int(event.get_group_id())
@@ -220,8 +219,9 @@ async def check_storage_and_notify(event: AstrMessageEvent, storage_limits: Dict
         if notifications:
             full_notification = "⚠️ 群文件容量警告 ⚠️\n" + "\n".join(notifications) + "\n请及时清理文件！"
             logger.warning(f"[{group_id}] 发送容量超限警告: {full_notification}")
-            await event.send(MessageChain([Comp.Plain(full_notification)]))
+            yield event.plain_result(full_notification)
     except ActionFailed as e:
         logger.error(f"[{group_id}] 调用 get_group_file_system_info 失败: {e}")
     except Exception as e:
         logger.error(f"[{group_id}] 处理容量检查时发生未知异常: {e}", exc_info=True)
+

@@ -109,7 +109,7 @@ async def perform_group_file_backup(
             notification += f"\n将仅备份 {date_str} 之后上传的文件。"
         notification += "\n备份操作将遍历所有文件，请耐心等待，这可能需要几分钟。"
         
-        await event.send(MessageChain([Comp.Plain(notification)]))
+        yield event.plain_result(notification)
         logger.info(f"{log_prefix} 预通知已发送。")
 
         # 2. 准备工作：获取群名、创建本地临时目录
@@ -208,7 +208,7 @@ async def perform_group_file_backup(
                     all_volumes = [new_volume_path]
 
             if not all_volumes:
-                await event.send(MessageChain([Comp.Plain(f"❌ 备份压缩成功，但未在目录中找到任何生成的压缩文件！")]))
+                yield event.plain_result(f"❌ 备份压缩成功，但未在目录中找到任何生成的压缩文件！")
             else:
                 reply_message = (
                     f"✅ 群文件备份完成！\n"
@@ -218,7 +218,7 @@ async def perform_group_file_backup(
                 if failed_downloads:
                     reply_message += f"\n⚠️ 备份失败文件数: {len(failed_downloads)} 个"
                 
-                await event.send(MessageChain([Comp.Plain(reply_message)]))
+                yield event.plain_result(reply_message)
 
                 # 逐个发送分卷文件
                 all_sent_success = True
@@ -226,19 +226,19 @@ async def perform_group_file_backup(
                     volume_name = os.path.basename(volume_path)
                     if not await upload_and_send_file_via_api(event, client, volume_path, volume_name):
                         all_sent_success = False
-                        await event.send(MessageChain([Comp.Plain(f"❌ 文件 {volume_name} 发送失败。")]))
+                        yield event.plain_result(f"❌ 文件 {volume_name} 发送失败。")
                         break
                         
                 if not all_sent_success:
-                    await event.send(MessageChain([Comp.Plain(f"❌ 备份发送中断。")]))
+                    yield event.plain_result(f"❌ 备份发送中断。")
                     
         elif downloaded_files_count == 0:
-             await event.send(MessageChain([Comp.Plain(f"ℹ️ 备份任务完成。但没有找到符合大小或后缀名限制的任何文件。")]))
+             yield event.plain_result(f"ℹ️ 备份任务完成。但没有找到符合大小或后缀名限制的任何文件。")
         else:
-            await event.send(MessageChain([Comp.Plain(f"❌ 备份任务失败：压缩文件失败或找不到压缩包。")]))
+            yield event.plain_result(f"❌ 备份任务失败：压缩文件失败或找不到压缩包。")
             
     except Exception as e:
         logger.error(f"{log_prefix} 备份任务执行过程中发生未知异常: {e}", exc_info=True)
-        await event.send(MessageChain([Comp.Plain(f"❌ 备份任务执行失败，发生内部错误。")]))
+        yield event.plain_result(f"❌ 备份任务执行失败，发生内部错误。")
     finally:
         asyncio.create_task(cleanup_backup_temp(backup_root_dir, final_zip_path))

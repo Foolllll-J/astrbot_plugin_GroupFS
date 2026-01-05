@@ -131,7 +131,7 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
                 display_path = relative_path.replace(os.sep, "/")
                 file_structure.append(f"[{i}] {display_path} ({size_str})")
             
-            file_structure.append("\n💡 提示：使用 /preview <序号> <内部序号> 预览特定文件。")
+            file_structure.append("\n💡 提示：使用 /预览 <序号> <内部序号> 预览特定文件。")
             structure_text = "\n".join(file_structure)
             return structure_text, None
         
@@ -183,7 +183,7 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
             error_message = (
                 f"❌ 预览文件「{file_name}」失败：\n"
                 f"该文件可能已失效。\n"
-                f"建议使用 /df {os.path.splitext(file_name)[0]} 将其删除。"
+                f"建议使用 /删除 {os.path.splitext(file_name)[0]} 将其删除。"
             )
             return "", error_message
         else:
