@@ -276,6 +276,11 @@ class GroupFSPlugin(Star):
         file_component = next((seg for seg in event.get_messages() if isinstance(seg, Comp.File)), None)
         if file_component:
             group_id = int(event.get_group_id())
+            
+            # 仅在配置了容量检查的群组中触发
+            if group_id not in self.storage_limits:
+                return
+
             file_id = getattr(file_component, 'file_id', None)
             file_name = getattr(file_component, 'file_name', None) or getattr(file_component, 'name', None)
             
