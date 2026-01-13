@@ -1,4 +1,4 @@
-# 📁 GroupFS - QQ群文件管理插件
+# 📁 QQ群文件管家
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white)
@@ -10,7 +10,7 @@
 
 ### 🔍 搜索与预览
 
-* **全能预览**: 支持预览 `.txt`、`.md`、`.json`、`.py`、`.log` 等 **30+ 种文本格式**。
+* **全能预览**: 支持预览 `.txt`、`.md`、`.json`、`.py`、`.log` 等 **30+ 种文本格式**，并支持将 `.pdf` 文件转换为 **图片预览**。
 * **压缩包解析**: 支持 `.zip`、`.7z` 等 **10+ 种主流压缩格式** 的内部结构查看与文本预览。
 * **智能交互**: 支持翻页（下一页/跳转）、引用预览、序号指定等多种便捷交互方式。
 
@@ -144,6 +144,8 @@
 <details>
 <summary>点击展开更新日志</summary>
 
+* **v1.1**
+  * 新增 PDF预览功能。
 * **v1.0**
   * 新增 `/preview` 指令。
   * 新增 `/rn` 重命名指令。

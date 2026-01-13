@@ -58,5 +58,16 @@
         "hint": "只有在列表中的文件类型才会被备份。用逗号分隔，如: txt,pdf,jpg",
         "type": "text",
         "default": "txt,zip" 
+    },
+    "pdf_preview_pages": {
+        "description": "PDF 预览页数",
+        "hint": "生成 PDF 预览图时的页数。可选范围 1-10，默认 1 页。",
+        "type": "int",
+        "slider": {
+            "min": 1,
+            "max": 10,
+            "step": 1
+        },
+        "default": 1
     }
 }

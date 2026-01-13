@@ -36,8 +36,8 @@ from .src.session_manager import SessionManager
 @register(
     "astrbot_plugin_GroupFS",
     "Foolllll",
-    "管理QQ群文件",
-    "1.0",
+    "QQ群文件管家",
+    "1.1",
     "https://github.com/Foolllll-J/astrbot_plugin_GroupFS"
 )
 class GroupFSPlugin(Star):
@@ -58,6 +58,7 @@ class GroupFSPlugin(Star):
         self.download_semaphore = asyncio.Semaphore(5)
         
         self.scheduled_autodelete: bool = self.config.get("scheduled_autodelete", False)
+        self.pdf_preview_pages: int = max(1, self.config.get("pdf_preview_pages", 1))
 
         limit_configs = self.config.get("storage_limits", [])
         for item in limit_configs:
@@ -419,16 +420,19 @@ class GroupFSPlugin(Star):
         session.current_page = page
         results = session.get_page_results(page)
         
-        reply_text = f"🔍 找到了 {session.total_count} 个与「{session.keyword}」相关的结果 (第 {page}/{total_pages} 页)：\n"
+        page_hint = f" (第 {page}/{total_pages} 页)" if total_pages > 1 else ""
+        reply_text = f"🔍 找到了 {session.total_count} 个与「{session.keyword}」相关的结果{page_hint}：\n"
         reply_text += "-" * 20
         
         start_idx = (page - 1) * session.page_size + 1
         for i, file_info in enumerate(results, start_idx):
+            file_name = file_info.get('file_name', '未知文件')
+            emoji = utils.get_file_emoji(file_name)
             parent_folder = file_info.get('parent_folder_name', '根目录')
-            path_display = f"\n  路径: {parent_folder}/" if parent_folder != '根目录' else ""
+            path_display = f"\n  路径: /{parent_folder}" if parent_folder != '根目录' else ""
             
             reply_text += (
-                f"\n[{i}] {file_info.get('file_name')}"
+                f"\n[{i}] {emoji} {file_name}"
                 f"{path_display}"
                 f"\n  上传者: {file_info.get('uploader_name', '未知')}"
                 f"\n  大小: {utils.format_bytes(file_info.get('size'))}"
@@ -440,7 +444,8 @@ class GroupFSPlugin(Star):
             reply_text += f"\n输入 /sf 下一页 查看下一页"
         if page > 1:
             reply_text += f"\n输入 /sf 上一页 查看上一页"
-        reply_text += f"\n输入 /sf 跳转 <页码> 跳转"
+        if total_pages > 1:
+            reply_text += f"\n输入 /sf 跳转 <页码> 跳转"
         reply_text += f"\n\n💡 快速操作："
         reply_text += f"\n• /预览 <序号> - 预览文件"
         reply_text += f"\n• /删除 <序号> - 删除文件"
@@ -450,19 +455,43 @@ class GroupFSPlugin(Star):
     async def _handle_preview(self, event: AstrMessageEvent, file_to_preview: dict, inner_path: str = None):
         group_id = int(event.get_group_id())
         try:
-            preview_text, error_msg = await self._get_file_preview(event, file_to_preview, inner_path)
+            preview_res, error_msg = await self._get_file_preview(event, file_to_preview, inner_path)
             if error_msg:
                 yield event.plain_result(error_msg)
                 return
             
-            title = f"📄 文件「{file_to_preview.get('file_name')}」内容预览"
+            title = f"📄 预览: {file_to_preview.get('file_name')}"
             if inner_path:
-                title += f" (内部路径: {inner_path})"
+                title += f" ({inner_path})"
             
+            if isinstance(preview_res, list):
+                # PDF 预览，发送合并消息
+                image_paths = preview_res
+                sender_id = event.get_self_id()
+                nodes = []
+                
+                # 第一条消息是标题
+                nodes.append(Comp.Node(uin=sender_id, name="PDF 预览", content=[Comp.Plain(f"{title}")]))
+                
+                for img_path in image_paths:
+                    nodes.append(Comp.Node(uin=sender_id, name="PDF 预览", content=[Comp.Image.fromFileSystem(img_path)]))
+                
+                yield event.chain_result([Comp.Nodes(nodes=nodes)])
+                
+                # 延迟清理图片
+                async def cleanup_images(paths):
+                    await asyncio.sleep(60)
+                    for p in paths:
+                        try:
+                            if os.path.exists(p): os.remove(p)
+                        except: pass
+                asyncio.create_task(cleanup_images(image_paths))
+                return
+
             reply_text = (
-                f"{title}：\n"
+                f"{title}\n"
                 + "-" * 20 + "\n"
-                + preview_text
+                + preview_res
             )
             yield event.plain_result(reply_text)
         except Exception as e:
@@ -862,7 +891,8 @@ class GroupFSPlugin(Star):
             self.preview_length, 
             self.download_semaphore,
             self._cleanup_folder,
-            inner_path
+            inner_path,
+            self.pdf_preview_pages
         )
 
     async def _create_zip_archive(self, source_dir: str, target_zip_path: str, password: str) -> bool:
@@ -964,7 +994,7 @@ class GroupFSPlugin(Star):
             yield res
 
     async def terminate(self):
-        logger.info("插件 [群文件系统GroupFS] 正在卸载，取消所有任务...")
+        logger.info("插件 [QQ群文件管家] 正在卸载，取消所有任务...")
 
         if self.scheduler and self.scheduler.running:
             try:
@@ -982,4 +1012,4 @@ class GroupFSPlugin(Star):
         except asyncio.CancelledError:
             pass
         
-        logger.info("插件 [群文件系统GroupFS] 已卸载。")
+        logger.info("插件 [QQ群文件管家] 已卸载。")

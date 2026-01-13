@@ -4,6 +4,7 @@ import time
 import subprocess
 import aiohttp
 import chardet
+import pypdfium2 as pdfium
 from typing import List, Dict, Optional
 from astrbot.api import logger
 from astrbot.api.star import StarTools
@@ -142,8 +143,7 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
         preview_text_raw, encoding = await get_preview_from_bytes(content_bytes)
         
         inner_file_name = os.path.relpath(preview_file_path, extract_path).replace(os.sep, "/")
-        extra_info = f"已解压「{inner_file_name}」(格式 {encoding})"
-        preview_text = f"{extra_info}\n{preview_text_raw}"
+        preview_text = f"📂 内部文件: {inner_file_name}\n" + "-" * 20 + f"\n{preview_text_raw}"
         
     except FileNotFoundError:
         logger.error("解压失败：容器内未找到 7za 命令。")
@@ -152,12 +152,47 @@ async def get_preview_from_archive(file_path: str, default_zip_password: str, pr
         logger.error(f"处理压缩文件时发生未知错误: {e}", exc_info=True)
         error_msg = "处理压缩文件时发生内部错误"
     finally:
-        if os.path.exists(extract_path):
-            asyncio.create_task(cleanup_fn(extract_path))
+        if extract_path and os.path.exists(extract_path):
+            try:
+                for root, dirs, files in os.walk(extract_path, topdown=False):
+                    for name in files:
+                        os.remove(os.path.join(root, name))
+                    for name in dirs:
+                        os.rmdir(os.path.join(root, name))
+                os.rmdir(extract_path)
+            except Exception as e:
+                logger.warning(f"删除临时文件夹 {extract_path} 失败: {e}")
     
     return preview_text, error_msg
 
-async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_password: str, preview_length: int, semaphore: asyncio.Semaphore, cleanup_fn, inner_target: str = None) -> tuple[str, str | None]:
+async def get_pdf_preview(file_path: str, max_pages: int = 1) -> List[str]:
+    """使用 pypdfium2 生成 PDF 预览图"""
+    if max_pages <= 0:
+        return []
+        
+    image_paths = []
+    temp_dir = os.path.join(StarTools.get_data_dir('astrbot_plugin_GroupFS'), 'temp_file_previews')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    try:
+        pdf = pdfium.PdfDocument(file_path)
+        num_pages = len(pdf)
+        pages_to_render = min(num_pages, max_pages)
+        
+        for i in range(pages_to_render):
+            page = pdf[i]
+            # scale=2 对应约 144 DPI
+            bitmap = page.render(scale=2)
+            image_path = os.path.join(temp_dir, f"pdf_preview_{int(time.time())}_{i}.png")
+            bitmap.to_pil().save(image_path)
+            image_paths.append(image_path)
+            page.close() # 释放资源
+        pdf.close() # 释放资源
+    except Exception as e:
+        logger.error(f"生成 PDF 预览失败: {e}", exc_info=True)
+    return image_paths
+
+async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_password: str, preview_length: int, semaphore: asyncio.Semaphore, cleanup_fn, inner_target: str = None, pdf_preview_pages: int = 1) -> tuple[str, str | None | List[str]]:
     file_id = file_info.get("file_id")
     file_name = file_info.get("file_name", "")
     _, file_extension = os.path.splitext(file_name)
@@ -165,9 +200,10 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
     
     is_txt = file_extension in utils.SUPPORTED_TEXT_FORMATS
     is_archive = file_extension in utils.SUPPORTED_ARCHIVE_FORMATS
+    is_pdf = file_extension in utils.SUPPORTED_PDF_FORMATS
     
-    if not (is_txt or is_archive):
-        return "", f"❌ 文件「{file_name}」不是支持的文本或压缩格式，无法预览。"
+    if not (is_txt or is_archive or is_pdf):
+        return "", f"❌ 文件「{file_name}」不是支持的文件格式，无法预览。"
         
     logger.info(f"[{group_id}] 正在为文件 '{file_name}' (ID: {file_id}) 获取预览 (目标: {inner_target})...")
     
@@ -213,12 +249,18 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
         error_msg = None
         if is_txt and not inner_target:
             decoded_text, _ = await get_preview_from_bytes(content_bytes)
-            preview_content = decoded_text
+            if decoded_text:
+                preview_content = decoded_text
         elif is_archive:
             preview_text, error_msg = await get_preview_from_archive(local_file_path, default_zip_password, preview_length, cleanup_fn, inner_target)
             if error_msg:
                 return "", error_msg
             preview_content = preview_text
+        elif is_pdf:
+            image_paths = await get_pdf_preview(local_file_path, pdf_preview_pages)
+            if not image_paths:
+                return "", "❌ 生成 PDF 预览失败。"
+            return image_paths, None
         elif is_txt and inner_target:
              return "", f"❌ 文本文件「{file_name}」不支持内部路径预览。"
         

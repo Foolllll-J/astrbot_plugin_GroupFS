@@ -65,13 +65,46 @@ SUPPORTED_ARCHIVE_FORMATS = (
     '.iso', '.wim', '.rar'
 )
 
+SUPPORTED_PDF_FORMATS = (
+    '.pdf',
+)
+
+# --- 辅助函数：根据文件名获取 Emoji ---
+def get_file_emoji(file_name: str) -> str:
+    ext = file_name.lower().split('.')[-1] if '.' in file_name else ''
+    if ext in ['txt', 'md', 'log', 'ini', 'yml', 'yaml', 'toml', 'conf', 'cfg']:
+        return "📄"
+    if ext in ['zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz', 'iso', 'wim']:
+        return "📦"
+    if ext == 'pdf':
+        return "📕"
+    if ext in ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg']:
+        return "🖼️"
+    if ext in ['mp4', 'mkv', 'avi', 'mov', 'wmv', 'flv']:
+        return "🎬"
+    if ext in ['mp3', 'wav', 'flac', 'ogg', 'm4a']:
+        return "🎵"
+    if ext in ['exe', 'msi', 'apk', 'app', 'dmg']:
+        return "⚙️"
+    if ext in ['py', 'js', 'java', 'c', 'cpp', 'go', 'rs', 'php', 'sh', 'bat', 'ps1', 'sql', 'html', 'css']:
+        return "💻"
+    if ext in ['xls', 'xlsx', 'csv']:
+        return "📊"
+    if ext in ['doc', 'docx']:
+        return "📝"
+    if ext in ['ppt', 'pptx']:
+        return "📽️"
+    return "📁"
+
 # --- 辅助函数：格式化搜索结果 ---
 def format_search_results(files: list[dict], search_term: str, for_delete: bool = False) -> str:
     reply_text = f"🔍 找到了 {len(files)} 个与「{search_term}」相关的结果：\n"
     reply_text += "-" * 20
     for i, file_info in enumerate(files, 1):
+        file_name = file_info.get('file_name', '未知文件')
+        emoji = get_file_emoji(file_name)
         reply_text += (
-            f"\n[{i}] {file_info.get('file_name')}"
+            f"\n[{i}] {emoji} {file_name}"
             f"\n  上传者: {file_info.get('uploader_name', '未知')}"
             f"\n  大小: {format_bytes(file_info.get('size'))}"
             f"\n  修改时间: {format_timestamp(file_info.get('modify_time'))}"
