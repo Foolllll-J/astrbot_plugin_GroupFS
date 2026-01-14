@@ -1,16 +1,22 @@
+<div align="center">
+
 # 📁 QQ群文件管家
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white)
 ![AstrBot](https://img.shields.io/badge/framework-AstrBot-ff6b6b?style=flat-square)
 
-一款为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的QQ群文件管理插件，旨在简化和自动化群组的文件维护工作。
+</div>
+
+## 📖 简介
+
+一款为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的QQ群文件管理插件，专注于群文件的**搜索、预览、清理、备份与容量监控**，帮助管理员高效维护群内各类资源。
 
 ## ✨ 功能特性
 
 ### 🔍 搜索与预览
 
-* **全能预览**: 支持预览 `.txt`、`.md`、`.json`、`.py`、`.log` 等 **30+ 种文本格式**，并支持将 `.pdf` 文件转换为 **图片预览**。
+* **全能预览**: 支持预览 `.txt`、`.md`、`.json`、`.py`、`.log` 等 **30+ 种文本格式**，支持 EPUB 电子书内容预览，并可将 `.pdf` 文件转换为 **图片预览**。
 * **压缩包解析**: 支持 `.zip`、`.7z` 等 **10+ 种主流压缩格式** 的内部结构查看与文本预览。
 * **智能交互**: 支持翻页（下一页/跳转）、引用预览、序号指定等多种便捷交互方式。
 
@@ -29,6 +35,8 @@
 
 * **多模式备份**: 支持全量备份、按日期增量备份，确保存量资源永不丢失。
 * **高级压缩**: 自动分卷压缩、加密保护，优化大文件和敏感文件的传输限制。
+
+---
 
 ## 💿 安装与依赖
 
@@ -51,9 +59,13 @@
 2. **安装插件**: 下载本插件的完整文件夹，并放入 AstrBot 的 `data/plugins/` 目录下。
 3. **重启 AstrBot**。
 
+---
+
 ## ⚙️ 配置
 
 首次加载后，请在 AstrBot 后台 -> 插件 页面找到本插件进行设置。所有配置项都有详细的说明和提示。
+
+---
 
 ## 📖 使用指南
 
@@ -113,6 +125,8 @@
 
 * **容量监控**与**定时检查**均为被动触发功能，只需在配置文件中正确设置，插件便会自动在后台执行。
 
+---
+
 ## ⚠️ 使用注意事项
 
 ### 备份功能说明
@@ -139,13 +153,16 @@
 * **文件数量限制**：当群文件数量很多时，生成的文件列表可能会很长。请确您使用的 LLM 支持足够长的输入。
 * **分析准确性**：AI 分析结果仅供参考，建议人工复核后再删除文件。
 
+---
+
 ## 📝 更新日志
 
 <details>
 <summary>点击展开更新日志</summary>
 
 * **v1.1**
-  * 新增 PDF预览功能。
+  * 新增 PDF 预览功能。
+  * 新增 EPUB 预览功能。
 * **v1.0**
   * 新增 `/preview` 指令。
   * 新增 `/rn` 重命名指令。
@@ -193,8 +210,18 @@
 2. **重启 NapCat**
 3. **重启 AstrBot**
 
+---
+
 ## ❤️ 支持
 
 * [AstrBot 帮助文档](https://astrbot.app)
 * 如果您在使用中遇到问题，欢迎在本仓库提交 [Issue](https://github.com/Foolllll-J/astrbot_plugin_GroupFS/issues)。
+
+---
+
+<div align="center">
+
+**如果本插件对你有帮助，欢迎点个 ⭐ Star 支持一下！**
+
+</div>
 

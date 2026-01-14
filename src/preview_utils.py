@@ -4,6 +4,9 @@ import time
 import subprocess
 import aiohttp
 import chardet
+import zipfile
+import xml.etree.ElementTree as ET
+import re
 import pypdfium2 as pdfium
 from typing import List, Dict, Optional
 from astrbot.api import logger
@@ -22,6 +25,82 @@ async def get_preview_from_bytes(content_bytes: bytes) -> tuple[str, str]:
         return "", "未知"
     except Exception:
         return "", "未知"
+
+def extract_epub_text(epub_path: str, max_chars: int) -> str:
+    if not zipfile.is_zipfile(epub_path):
+        return "错误：不是有效的 EPUB 文件（无效的 ZIP 结构）。"
+    try:
+        with zipfile.ZipFile(epub_path, 'r') as z:
+            try:
+                container_content = z.read('META-INF/container.xml')
+                root = ET.fromstring(container_content)
+                ns = {'ns': 'urn:oasis:names:tc:opendocument:xmlns:container'}
+                rootfile = root.find('.//ns:rootfile', ns)
+                if rootfile is None:
+                    return "错误：EPUB 结构异常，未找到 rootfile。"
+                opf_path = rootfile.attrib.get('full-path')
+            except Exception as e:
+                return f"错误：解析 container.xml 失败: {e}"
+            if not opf_path:
+                return "错误：未找到 OPF 文件路径。"
+            try:
+                opf_content = z.read(opf_path)
+                opf_dir = os.path.dirname(opf_path)
+                root = ET.fromstring(opf_content)
+                ns = {'opf': 'http://www.idpf.org/2007/opf'}
+                manifest = {}
+                for item in root.findall('.//opf:manifest/opf:item', ns):
+                    item_id = item.attrib.get('id')
+                    href = item.attrib.get('href')
+                    if item_id and href:
+                        manifest[item_id] = href
+                spine_items = []
+                for itemref in root.findall('.//opf:spine/opf:itemref', ns):
+                    idref = itemref.attrib.get('idref')
+                    if idref in manifest:
+                        full_href = os.path.join(opf_dir, manifest[idref]).replace('\\', '/')
+                        spine_items.append(full_href)
+            except Exception as e:
+                return f"错误：解析 OPF 文件失败: {e}"
+            full_text = []
+            current_len = 0
+            re_scripts = re.compile(r'<(script|style).*?>.*?</\1>', re.DOTALL | re.IGNORECASE)
+            re_block_tags = re.compile(r'<(p|div|br|li|h[1-6]|tr|blockquote|section|article).*?>', re.IGNORECASE)
+            re_tags = re.compile(r'<[^>]+>')
+            re_spaces = re.compile(r'[ \t\f\v]+')
+            re_newlines = re.compile(r'\n{3,}')
+            for item_path in spine_items:
+                if current_len >= max_chars * 2:
+                    break
+                try:
+                    html_content = z.read(item_path).decode('utf-8', errors='ignore')
+                    text = re_scripts.sub('', html_content)
+                    text = text.replace('\r', ' ').replace('\n', ' ')
+                    text = re_block_tags.sub('\n', text)
+                    text = re_tags.sub('', text)
+                    text = text.replace('&nbsp;', ' ').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&quot;', '"')
+                    text = re_spaces.sub(' ', text)
+                    lines = []
+                    for line in text.split('\n'):
+                        stripped = line.strip()
+                        if stripped:
+                            lines.append(stripped)
+                    text = '\n'.join(lines)
+                    if text:
+                        full_text.append(text)
+                        current_len += len(text)
+                except Exception:
+                    continue
+            result = "\n\n".join(full_text)
+            result = re_newlines.sub('\n\n', result).strip()
+            if not result:
+                return "（未提取到有效文本内容）"
+            if len(result) > max_chars:
+                return result[:max_chars + 1]
+            return result
+    except Exception as e:
+        logger.error(f"提取 EPUB 文本时出错: {e}", exc_info=True)
+        return f"错误：提取失败: {e}"
 
 async def get_preview_from_archive(file_path: str, default_zip_password: str, preview_length: int, cleanup_fn, inner_target: str = None) -> tuple[str, str]:
     """从本地压缩文件中解压并预览最合适的文本文件。支持多种格式。"""
@@ -201,8 +280,9 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
     is_txt = file_extension in utils.SUPPORTED_TEXT_FORMATS
     is_archive = file_extension in utils.SUPPORTED_ARCHIVE_FORMATS
     is_pdf = file_extension in utils.SUPPORTED_PDF_FORMATS
+    is_epub = file_extension == ".epub"
     
-    if not (is_txt or is_archive or is_pdf):
+    if not (is_txt or is_archive or is_pdf or is_epub):
         return "", f"❌ 文件「{file_name}」不是支持的文件格式，无法预览。"
         
     logger.info(f"[{group_id}] 正在为文件 '{file_name}' (ID: {file_id}) 获取预览 (目标: {inner_target})...")
@@ -247,7 +327,11 @@ async def get_file_preview(group_id: int, file_info: dict, bot, default_zip_pass
         
         preview_content = ""
         error_msg = None
-        if is_txt and not inner_target:
+        if is_epub:
+            preview_text = extract_epub_text(local_file_path, preview_length)
+            if preview_text:
+                preview_content = "📖 EPUB 内容预览：\n" + preview_text
+        elif is_txt and not inner_target:
             decoded_text, _ = await get_preview_from_bytes(content_bytes)
             if decoded_text:
                 preview_content = decoded_text
