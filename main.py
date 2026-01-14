@@ -282,11 +282,10 @@ class GroupFSPlugin(Star):
             if group_id not in self.storage_limits:
                 return
 
-            file_id = getattr(file_component, 'file_id', None)
             file_name = getattr(file_component, 'file_name', None) or getattr(file_component, 'name', None)
             
-            logger.info(f"[{group_id}] 检测到文件上传事件: {file_name} ({file_id})，将在5秒后触发容量检查。")
-            await asyncio.sleep(5)
+            logger.info(f"[{group_id}] 检测到文件上传事件: {file_name}，将触发容量检查。")
+            await asyncio.sleep(1)
             async for res in self._check_storage_and_notify(event):
                 yield res
 
