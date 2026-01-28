@@ -1,6 +1,8 @@
 <div align="center">
 
-# 📁 QQ群文件管家
+# 📁 QQ 群文件管家
+
+<i>🤖 全能文件管理，自动清理备份</i>
 
 ![License](https://img.shields.io/badge/license-AGPL--3.0-green?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.10+-blue?style=flat-square&logo=python&logoColor=white)
@@ -10,7 +12,9 @@
 
 ## 📖 简介
 
-一款为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的QQ群文件管理插件，专注于群文件的**搜索、预览、清理、备份与容量监控**，帮助管理员高效维护群内各类资源。
+一款为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的 QQ 群文件管理插件，专注于群文件的**搜索、预览、清理、备份与容量监控**，帮助管理员高效维护群内各类资源。
+
+---
 
 ## ✨ 功能特性
 
