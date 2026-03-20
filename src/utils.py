@@ -1,11 +1,6 @@
-# astrbot_plugin_GroupFS/utils.py
-
 import datetime
 from datetime import datetime as dt
-from typing import Optional, List
-from astrbot.api.event import AstrMessageEvent, MessageChain
-from astrbot.api import logger
-import astrbot.api.message_components as Comp
+from typing import Optional
 
 # --- 辅助函数：格式化文件大小 ---
 def format_bytes(size: int, target_unit=None) -> str:
@@ -115,3 +110,41 @@ def format_search_results(files: list[dict], search_term: str, for_delete: bool 
     else:
         reply_text += f"\n如需删除，请使用 /删除 {search_term} [序号]"
     return reply_text
+
+
+async def send_report_message(
+    client,
+    group_id: int,
+    text: str,
+    threshold: int = 100,
+    node_name: str = "定时报告",
+) -> None:
+    msg = text if isinstance(text, str) else str(text)
+    if len(msg) <= threshold:
+        await client.api.call_action("send_group_msg", group_id=group_id, message=msg)
+        return
+    await _send_forward_text(client, group_id, msg, node_name=node_name)
+
+
+async def _send_forward_text(
+    client,
+    group_id: int,
+    text: str,
+    node_name: str,
+) -> None:
+    uin = str(client.self_id)
+    nodes = [
+        {
+            "type": "node",
+            "data": {
+                "name": node_name,
+                "uin": uin,
+                "content": [{"type": "text", "data": {"text": text}}],
+            },
+        }
+    ]
+    await client.api.call_action(
+        "send_group_forward_msg",
+        group_id=group_id,
+        messages=nodes,
+    )

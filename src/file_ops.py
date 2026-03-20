@@ -1,12 +1,9 @@
 import os
 import asyncio
-import time
 import subprocess
 import aiohttp
-import chardet
 from typing import List, Dict, Optional
 from astrbot.api import logger
-from astrbot.api.star import StarTools
 from aiocqhttp.exceptions import ActionFailed
 from . import utils
 

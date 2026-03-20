@@ -5,11 +5,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import croniter
 
-from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star, register, StarTools
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
 import astrbot.api.message_components as Comp
-from aiocqhttp.exceptions import ActionFailed 
 
 from .src import utils
 from .src.file_ops import (
@@ -28,6 +27,7 @@ from .src.actions import (
     perform_batch_delete,
     check_storage_and_notify
 )
+from .src.utils import send_report_message
 from .src.backup import perform_group_file_backup
 from .src.duplicate_check import detect_duplicates
 from .src.session_manager import SessionManager
@@ -44,9 +44,7 @@ class GroupFSPlugin(Star):
     def __init__(self, context: Context, config: Optional[Dict] = None):
         super().__init__(context)
         self.config = config if config else {}
-        self.group_whitelist: List[int] = [int(g) for g in self.config.get("group_whitelist", [])]
         self.admin_users: List[int] = [int(u) for u in self.config.get("admin_users", [])]
-        self.preview_length: int = self.config.get("preview_length", 300)
         self.storage_limits: Dict[int, Dict] = {}
         self.cron_configs = []
         self.bot = None
@@ -54,56 +52,121 @@ class GroupFSPlugin(Star):
         
         self.active_tasks = [] 
         
-        self.default_zip_password: str = self.config.get("default_zip_password", "")
+        preview_cfg_list = self.config.get("preview_module", [])
+        backup_cfg_list = self.config.get("backup_module", [])
+        check_cfg_list = self.config.get("check_module", [])
+
+        self._preview_default = {
+            "preview_length": 1000,
+            "default_zip_password": "",
+            "pdf_preview_pages": 1,
+        }
+        self._backup_default = {
+            "backup_zip_password": "",
+            "backup_file_size_limit_mb": 100,
+            "backup_file_extensions": "txt,zip",
+        }
+        self.preview_configs = self._build_group_configs(
+            preview_cfg_list, self._preview_default
+        )
+        self.backup_configs = self._build_group_configs(
+            backup_cfg_list, self._backup_default
+        )
+
         self.download_semaphore = asyncio.Semaphore(5)
         
-        self.scheduled_autodelete: bool = self.config.get("scheduled_autodelete", False)
-        self.pdf_preview_pages: int = max(1, self.config.get("pdf_preview_pages", 1))
+        if not isinstance(check_cfg_list, list):
+            check_cfg_list = []
 
-        limit_configs = self.config.get("storage_limits", [])
-        for item in limit_configs:
+        for item in check_cfg_list:
+            if not isinstance(item, dict):
+                continue
+            group_id = str(item.get("group_id", "")).strip()
+            if not group_id:
+                continue
             try:
-                group_id_str, count_limit_str, space_limit_str = item.split(':')
-                group_id = int(group_id_str)
-                self.storage_limits[group_id] = { "count_limit": int(count_limit_str), "space_limit_gb": float(space_limit_str) }
-            except ValueError as e:
-                logger.error(f"解析 storage_limits 配置 '{item}' 时出错: {e}，已跳过。")
-        
-        self.backup_zip_password: str = self.config.get("backup_zip_password", "")
-        self.backup_file_size_limit_mb: int = self.config.get("backup_file_size_limit_mb", 0)
-        ext_str: str = self.config.get("backup_file_extensions", "txt,zip")
-        
-        self.backup_file_extensions: List[str] = [
-            ext.strip().lstrip('.').lower()
-            for ext in ext_str.split(',') 
-            if ext.strip()
-        ]
+                group_id = int(group_id)
+            except (TypeError, ValueError):
+                logger.error(f"检查配置中群号无效: {group_id}，已跳过。")
+                continue
+
+            count_limit = item.get("count_limit", 0)
+            space_limit_gb = item.get("space_limit_gb", 0)
+            if count_limit > 0 or space_limit_gb > 0:
+                self.storage_limits[group_id] = {
+                    "count_limit": int(count_limit),
+                    "space_limit_gb": float(space_limit_gb),
+                }
+
+            cron_list = item.get("scheduled_check_tasks") or []
+            auto_delete = bool(item.get("scheduled_autodelete", False))
+            if isinstance(cron_list, list):
+                for cron_str in cron_list:
+                    if not isinstance(cron_str, str) or not cron_str.strip():
+                        continue
+                    if not croniter.croniter.is_valid(cron_str):
+                        logger.error(f"无效的 cron 表达式: {cron_str}，已跳过。")
+                        continue
+                    self.cron_configs.append(
+                        {
+                            "group_id": group_id,
+                            "cron_str": cron_str,
+                            "auto_delete": auto_delete,
+                        }
+                    )
 
         # 搜索会话管理
         self.search_cache_timeout = 600 # 10分钟
         self.search_results_per_page = 20
         self.session_mgr = SessionManager(timeout=self.search_cache_timeout)
 
-        cron_configs = self.config.get("scheduled_check_tasks", [])
-        seen_tasks = set()
-        for item in cron_configs:
-            try:
-                group_id_str, cron_str = item.split(':', 1)
-                group_id = int(group_id_str)
-                if not croniter.croniter.is_valid(cron_str):
-                    raise ValueError(f"无效的 cron 表达式: {cron_str}")
-                
-                task_identifier = (group_id, cron_str)
+        if self.cron_configs:
+            seen_tasks = set()
+            unique_configs = []
+            for cfg in self.cron_configs:
+                task_identifier = (cfg.get("group_id"), cfg.get("cron_str"))
                 if task_identifier in seen_tasks:
-                    logger.warning(f"检测到重复的定时任务配置 '{item}'，已跳过。")
+                    logger.warning(f"检测到重复的定时任务配置 '{task_identifier}'，已跳过。")
                     continue
-                
-                self.cron_configs.append({"group_id": group_id, "cron_str": cron_str})
                 seen_tasks.add(task_identifier)
-            except ValueError as e:
-                logger.error(f"解析 scheduled_check_tasks 配置 '{item}' 时出错: {e}，已跳过。")
+                unique_configs.append(cfg)
+            self.cron_configs = unique_configs
         
         logger.info("插件 [群文件系统GroupFS] 已加载。")
+
+    def _build_group_configs(self, raw_list, defaults: Dict) -> List[Dict]:
+        if not isinstance(raw_list, list):
+            return []
+        configs: List[Dict] = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+            group_id = str(item.get("group_id", "")).strip()
+            cfg = defaults.copy()
+            for k, v in item.items():
+                if k == "group_id":
+                    continue
+                if v is not None:
+                    cfg[k] = v
+            cfg["group_id"] = group_id
+            configs.append(cfg)
+        return configs
+
+    def _get_group_config(self, group_id: int, configs: List[Dict], defaults: Dict):
+        gid = str(group_id)
+        for cfg in configs:
+            if cfg.get("group_id") == gid:
+                return cfg
+        for cfg in configs:
+            if cfg.get("group_id") == "":
+                return cfg
+        return defaults
+
+    def _is_admin(self, event: AstrMessageEvent) -> bool:
+        if event.is_admin():
+            return True
+        user_id = int(event.get_sender_id())
+        return user_id in self.admin_users
 
     async def initialize(self):
         # 尝试从 platform_manager 自动获取 bot 实例
@@ -176,6 +239,7 @@ class GroupFSPlugin(Star):
         for job_config in self.cron_configs:
             group_id = job_config["group_id"]
             cron_str = job_config["cron_str"]
+            auto_delete = bool(job_config.get("auto_delete", False))
             job_id = f"scheduled_check_{group_id}_{cron_str.replace(' ', '_')}"
             
             if self.scheduler.get_job(job_id):
@@ -189,7 +253,7 @@ class GroupFSPlugin(Star):
                 self.scheduler.add_job(
                     self._apscheduler_check_task,
                     "cron",
-                    args=[group_id, self.scheduled_autodelete],
+                    args=[group_id, auto_delete],
                     minute=minute,
                     hour=hour,
                     day=day,
@@ -207,12 +271,19 @@ class GroupFSPlugin(Star):
             logger.warning(f"[{group_id}] [定时任务] 无法执行，因为尚未捕获到 bot 实例。")
             return
 
-        async for msg in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, self.scheduled_autodelete):
+        async for msg in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits):
             if self.bot:
-                await self.bot.api.call_action('send_group_msg', group_id=group_id, message=msg)
+                node_name = "定时清理报告" if auto_delete else "定时检查报告"
+                await send_report_message(
+                    self.bot,
+                    group_id,
+                    msg,
+                    threshold=100,
+                    node_name=node_name,
+                )
 
     async def _perform_scheduled_check(self, group_id: int, auto_delete: bool):
-        async for res in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, self.scheduled_autodelete):
+        async for res in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits):
             yield res
 
 
@@ -231,6 +302,7 @@ class GroupFSPlugin(Star):
     async def _cleanup_backup_temp(self, backup_dir: str, zip_path: Optional[str]):
         await cleanup_backup_temp(backup_dir, zip_path)
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("cdf", alias={"清理失效文件","清理失效群文件"})
     async def on_check_and_delete_command(self, event: AstrMessageEvent):
         """扫描并自动删除所有失效文件"""
@@ -242,13 +314,14 @@ class GroupFSPlugin(Star):
         group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         logger.info(f"[{group_id}] 用户 {user_id} 触发 /cdf 失效文件清理指令。")
-        if user_id not in self.admin_users:
+        if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
         yield event.plain_result("⚠️ 警告：即将开始扫描并自动删除所有失效文件！\n此过程可能需要几分钟，请耐心等待，完成后将发送报告。")
         async for res in perform_batch_check_and_delete(event):
             yield res
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("cf", alias={"检查群文件"})
     async def on_check_files_command(self, event: AstrMessageEvent):
         """扫描并查找群内的失效文件（仅检查不删除）"""
@@ -259,7 +332,7 @@ class GroupFSPlugin(Star):
             return
         group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
-        if user_id not in self.admin_users:
+        if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
         logger.info(f"[{group_id}] 用户 {user_id} 触发 /cf 失效文件检查指令。")
@@ -270,6 +343,7 @@ class GroupFSPlugin(Star):
             else:
                 yield res
     
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=10)
     async def on_group_file_upload(self, event: AstrMessageEvent):
         """监控群文件上传事件"""
@@ -296,6 +370,7 @@ class GroupFSPlugin(Star):
     def _format_search_results(self, files: List[Dict], search_term: str, for_delete: bool = False) -> str:
         return utils.format_search_results(files, search_term, for_delete)
     
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("sf", alias={"搜索"})
     async def on_search_file_command(self, event: AstrMessageEvent):
         """搜索群文件"""
@@ -497,6 +572,7 @@ class GroupFSPlugin(Star):
             logger.error(f"[{group_id}] 处理预览时发生未知异常: {e}", exc_info=True)
             yield event.plain_result("❌ 预览文件时发生内部错误，请检查后台日志。")
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("preview", alias={"预览"})
     async def on_preview_command(self, event: AstrMessageEvent):
         """预览群文件内容"""
@@ -586,6 +662,7 @@ class GroupFSPlugin(Star):
             async for res in self._handle_preview(event, file_to_preview, inner_path):
                 yield res
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("df", alias={"删除"})
     async def on_delete_file_command(self, event: AstrMessageEvent):
         """删除指定的群文件"""
@@ -598,7 +675,7 @@ class GroupFSPlugin(Star):
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
         
-        if user_id not in self.admin_users:
+        if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
 
@@ -704,6 +781,7 @@ class GroupFSPlugin(Star):
             async for res in self._show_search_page(event, session, 1):
                 yield res
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("rn", alias={"重命名"})
     async def on_rename_command(self, event: AstrMessageEvent):
         """重命名指定的群文件"""
@@ -717,7 +795,7 @@ class GroupFSPlugin(Star):
         command_parts = event.message_str.split()
         
         # 权限校验
-        if user_id not in self.admin_users:
+        if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
 
@@ -882,34 +960,48 @@ class GroupFSPlugin(Star):
         await cleanup_folder(path)
 
     async def _get_file_preview(self, event: AstrMessageEvent, file_info: dict, inner_path: str = None) -> tuple[str, str | None]:
+        group_id = int(event.get_group_id())
+        preview_cfg = self._get_group_config(
+            group_id, self.preview_configs, self._preview_default
+        )
         return await get_file_preview(
-            int(event.get_group_id()), 
+            group_id,
             file_info, 
             event.bot, 
-            self.default_zip_password, 
-            self.preview_length, 
+            preview_cfg.get("default_zip_password", ""),
+            int(preview_cfg.get("preview_length", 1000)),
             self.download_semaphore,
             self._cleanup_folder,
             inner_path,
-            self.pdf_preview_pages
+            max(1, int(preview_cfg.get("pdf_preview_pages", 1)))
         )
 
     async def _create_zip_archive(self, source_dir: str, target_zip_path: str, password: str) -> bool:
         return await create_zip_archive(source_dir, target_zip_path, password)
 
     async def _perform_group_file_backup(self, event: AstrMessageEvent, group_id: int, date_filter_timestamp: Optional[int] = None):
+        backup_cfg = self._get_group_config(
+            group_id, self.backup_configs, self._backup_default
+        )
+        ext_str = str(backup_cfg.get("backup_file_extensions", "txt,zip"))
+        backup_file_extensions = [
+            ext.strip().lstrip('.').lower()
+            for ext in ext_str.split(',')
+            if ext.strip()
+        ]
         async for res in perform_group_file_backup(
             event, 
             group_id, 
             self.bot, 
             self.download_semaphore, 
-            self.backup_file_size_limit_mb,
-            self.backup_file_extensions,
-            self.backup_zip_password,
+            int(backup_cfg.get("backup_file_size_limit_mb", 100)),
+            backup_file_extensions,
+            str(backup_cfg.get("backup_zip_password", "")),
             date_filter_timestamp
         ):
             yield res
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("ddf", alias={"重复文件检测","重复群文件检测","群文件查重"})
     async def on_detect_duplicates_command(self, event: AstrMessageEvent):
         """检测群文件中的重复文件（使用LLM分析）"""
@@ -919,8 +1011,7 @@ class GroupFSPlugin(Star):
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
             return
         
-        user_id = int(event.get_sender_id())
-        if user_id not in self.admin_users:
+        if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行重复文件检测的权限。")
             return
         
@@ -928,13 +1019,12 @@ class GroupFSPlugin(Star):
             event, 
             self.bot, 
             self.context, 
-            self.admin_users, 
-            self.group_whitelist, 
             self._get_all_files_recursive_core, 
             self.text_to_image
         ):
             yield result
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("gfb", alias={"备份群文件","群文件备份"})
     async def on_group_file_backup_command(self, event: AstrMessageEvent):
         """备份指定群聊或当前群聊的群文件"""
@@ -979,13 +1069,9 @@ class GroupFSPlugin(Star):
 
         logger.info(f"用户 {user_id} 触发 /gfb 备份指令，目标群ID: {target_group_id}, 日期筛选: {command_parts[2] if len(command_parts) > 2 else '无'}")
 
-        # 2. 权限和白名单校验
-        if user_id not in self.admin_users:
+        # 2. 权限校验
+        if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行群文件备份操作的权限。")
-            return
-        
-        if self.group_whitelist and target_group_id not in self.group_whitelist:
-            yield event.plain_result("⚠️ 目标群聊不在插件配置的白名单中，操作已拒绝。")
             return
 
         # 3. 执行备份任务

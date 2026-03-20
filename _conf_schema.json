@@ -1,73 +1,162 @@
 {
-    "group_whitelist": {
-        "description": "群组白名单",
-        "hint": "仅在白名单里的群启用本插件功能，不填则表示所有群都启用。",
-        "type": "list",
-        "default": []
-    },
     "admin_users": {
-        "description": "管理员QQ列表",
-        "hint": "只有在此列表中的用户才有权限使用 /删除, /备份群文件 等管理指令。为了安全，强烈建议配置此项！",
+        "description": "管理员列表",
+        "hint": "只有在此列表中的用户才有权限使用管理指令。Bot 管理员默认允许。",
         "type": "list",
         "default": []
     },
-    "preview_length": {
-        "description": "文本预览长度 (字符)",
-        "hint": "使用 /搜索 文件名 <序号> 指令时，显示的内容预览的最大字符数。",
-        "type": "int",
-        "default": 1000
+    "preview_module": {
+        "type": "template_list",
+        "description": "预览配置",
+        "hint": "按群配置预览参数，群号为空表示全局生效。",
+        "default": [
+            {
+                "group_id": "",
+                "preview_length": 1000,
+                "default_zip_password": "",
+                "pdf_preview_pages": 1
+            }
+        ],
+        "templates": {
+            "default": {
+                "name": "预览配置",
+                "items": {
+                    "group_id": {
+                        "description": "群号",
+                        "hint": "为空表示全局生效。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "preview_length": {
+                        "description": "文本预览长度 (字符)",
+                        "hint": "使用预览指令时，显示的内容预览的最大字符数。",
+                        "type": "int",
+                        "default": 1000
+                    },
+                    "default_zip_password": {
+                        "description": "默认 ZIP 解压密码",
+                        "hint": "在预览加密的 ZIP 压缩包时，会尝试使用此密码进行解压。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "pdf_preview_pages": {
+                        "description": "PDF 预览页数",
+                        "hint": "生成 PDF 预览图时的页数。",
+                        "type": "int",
+                        "slider": {
+                            "min": 1,
+                            "max": 10,
+                            "step": 1
+                        },
+                        "default": 1
+                    }
+                }
+            }
+        }
     },
-    "default_zip_password": {
-        "description": "默认ZIP解压密码",
-        "hint": "在预览加密的ZIP压缩包时，会尝试使用此密码进行解压。",
-        "type": "string",
-        "default": ""
+    "check_module": {
+        "type": "template_list",
+        "description": "检查配置",
+        "hint": "配置单个群的容量监控与定时检查任务。",
+        "default": [
+            {
+                "group_id": "",
+                "scheduled_check_tasks": [],
+                "scheduled_autodelete": false,
+                "count_limit": 0,
+                "space_limit_gb": 0
+            }
+        ],
+        "templates": {
+            "default": {
+                "name": "检查配置",
+                "items": {
+                    "group_id": {
+                        "description": "群号",
+                        "hint": "配置目标群号，留空表示不生效。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "scheduled_check_tasks": {
+                        "description": "定时失效文件检查任务",
+                        "hint": "Cron 表达式（分 时 日 月 周），例如: 0 3 * * 1",
+                        "type": "list",
+                        "default": []
+                    },
+                    "scheduled_autodelete": {
+                        "description": "自动删除失效文件",
+                        "hint": "开启后，定时任务检测到失效文件将直接删除。",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "count_limit": {
+                        "description": "文件数量上限",
+                        "hint": "超过此数量触发提醒，0 表示不监控。",
+                        "type": "int",
+                        "slider": {
+                            "min": 0,
+                            "max": 1500,
+                            "step": 10
+                        },
+                        "default": 0
+                    },
+                    "space_limit_gb": {
+                        "description": "空间上限 (GB)",
+                        "hint": "超过此容量触发提醒，0 表示不监控。",
+                        "type": "float",
+                        "slider": {
+                            "min": 0,
+                            "max": 10,
+                            "step": 0.01
+                        },
+                        "default": 0
+                    }
+                }
+            }
+        }
     },
-    "storage_limits": {
-        "description": "群文件容量监控阈值 (列表)",
-        "hint": "格式为 \"群号:文件数量上限:空间上限GB\"，例如 \"123456:1000:9.5\"。当任一数值达到上限时，上传文件会触发提醒。",
-        "type": "list",
-        "default": []
-    },
-    "scheduled_check_tasks": {
-        "description": "定时失效文件检查任务 (列表)",
-        "hint": "格式为 \"群号:cron表达式\"。例如 \"123456:0 3 * * 1\" 代表为群123456在每周一凌晨3点执行一次检查。",
-        "type": "list",
-        "default": []
-    },
-    "scheduled_autodelete": {
-        "description": "定时任务自动删除失效文件",
-        "hint": "开启后，定时任务检测到失效文件将直接删除，而不是只发送报告。默认只报告，不删除。",
-        "type": "bool",
-        "default": false
-    },
-    "backup_zip_password": {
-        "description": "备份压缩包加密密码",
-        "hint": "使用 /gfb 指令备份文件时，生成的ZIP压缩包将使用此密码加密。留空则不加密。",
-        "type": "string",
-        "default": ""
-    },
-    "backup_file_size_limit_mb": {
-        "description": "单文件备份大小上限 (MB)",
-        "hint": "超过此大小的群文件将跳过备份。设置为 0 或不填则表示无限制。",
-        "type": "int",
-        "default": 100
-    },
-    "backup_file_extensions": {
-        "description": "允许备份的文件扩展名",
-        "hint": "只有在列表中的文件类型才会被备份。用逗号分隔，如: txt,pdf,jpg",
-        "type": "text",
-        "default": "txt,zip" 
-    },
-    "pdf_preview_pages": {
-        "description": "PDF 预览页数",
-        "hint": "生成 PDF 预览图时的页数。可选范围 1-10，默认 1 页。",
-        "type": "int",
-        "slider": {
-            "min": 1,
-            "max": 10,
-            "step": 1
-        },
-        "default": 1
+    "backup_module": {
+        "type": "template_list",
+        "description": "备份配置",
+        "hint": "按群配置备份参数，群号为空表示全局生效。",
+        "default": [
+            {
+                "group_id": "",
+                "backup_zip_password": "",
+                "backup_file_size_limit_mb": 100,
+                "backup_file_extensions": "txt,zip"
+            }
+        ],
+        "templates": {
+            "default": {
+                "name": "备份配置",
+                "items": {
+                    "group_id": {
+                        "description": "群号",
+                        "hint": "为空表示全局生效。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "backup_zip_password": {
+                        "description": "备份压缩包加密密码",
+                        "hint": "使用指令备份文件时，生成的 ZIP 压缩包将使用此密码加密。留空则不加密。",
+                        "type": "string",
+                        "default": ""
+                    },
+                    "backup_file_size_limit_mb": {
+                        "description": "单文件备份大小上限 (MB)",
+                        "hint": "超过此大小的群文件将跳过备份。设置为 0 或不填则表示无限制。",
+                        "type": "int",
+                        "default": 100
+                    },
+                    "backup_file_extensions": {
+                        "description": "允许备份的文件扩展名",
+                        "hint": "只有在列表中的文件类型才会被备份。用逗号分隔，如: txt,pdf,jpg",
+                        "type": "text",
+                        "default": "txt,zip"
+                    }
+                }
+            }
+        }
     }
 }

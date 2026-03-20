@@ -8,7 +8,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 import re
 import pypdfium2 as pdfium
-from typing import List, Dict, Optional
+from typing import List
 from astrbot.api import logger
 from astrbot.api.star import StarTools
 from aiocqhttp.exceptions import ActionFailed

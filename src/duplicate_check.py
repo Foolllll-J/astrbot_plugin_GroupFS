@@ -1,7 +1,5 @@
-import os
-import asyncio
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import Any
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from . import utils
@@ -10,22 +8,14 @@ async def detect_duplicates(
     event: AstrMessageEvent, 
     bot, 
     context: Any,
-    admin_users: List[int],
-    group_whitelist: List[int],
     get_all_files_fn, # 传入获取全量文件的函数
     text_to_image_fn # 传入文字转图片的函数
 ):
     """检测群文件中的重复文件（使用LLM分析）"""
-    user_id = int(event.get_sender_id())
     group_id = event.get_group_id()
     
     if not group_id:
         yield event.plain_result("❌ 此指令仅可在群聊中使用。")
-        return
-    
-    # 白名单校验
-    if group_whitelist and int(group_id) not in group_whitelist:
-        yield event.plain_result("⚠️ 当前群聊不在插件配置的白名单中。")
         return
     
     try:

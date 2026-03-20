@@ -2,10 +2,9 @@ import os
 import asyncio
 import time
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, MessageChain
-import astrbot.api.message_components as Comp
+from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import StarTools
 from aiocqhttp.exceptions import ActionFailed
 from . import utils

@@ -1,13 +1,12 @@
 import asyncio
-from typing import List, Dict, Optional
+from typing import List, Dict
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, MessageChain
-import astrbot.api.message_components as Comp
+from astrbot.api.event import AstrMessageEvent
 from aiocqhttp.exceptions import ActionFailed
 from . import utils
 from .file_ops import get_all_files_recursive_core
 
-async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage_limits: Dict[int, Dict], scheduled_autodelete: bool):
+async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage_limits: Dict[int, Dict]):
     """统一的定时检查函数，根据auto_delete决定是否删除。"""
     log_prefix = "[清理任务]" if auto_delete else "[检查任务]"
     report_title = "清理报告" if auto_delete else "检查报告"
@@ -212,16 +211,15 @@ async def check_storage_and_notify(event: AstrMessageEvent, storage_limits: Dict
         count_limit = limits['count_limit']
         space_limit = limits['space_limit_gb']
         notifications = []
-        if file_count >= count_limit:
-            notifications.append(f"文件数量已达 {file_count}，接近或超过设定的 {count_limit} 上限！")
-        if used_space_gb >= space_limit:
-            notifications.append(f"已用空间已达 {used_space_gb:.2f}GB，接近或超过设定的 {space_limit:.2f}GB 上限！")
+        if count_limit > 0 and file_count >= count_limit:
+            notifications.append(f"文件数量已达 {file_count}，超过设定上限 {count_limit}！")
+        if space_limit > 0 and used_space_gb >= space_limit:
+            notifications.append(f"已用空间已达 {used_space_gb:.2f}GB，超过设定上限 {space_limit:.2f}GB！")
         if notifications:
-            full_notification = "⚠️ 群文件容量警告 ⚠️\n" + "\n".join(notifications) + "\n请及时清理文件！"
+            full_notification = "⚠️ 群文件容量警告\n" + "\n".join(notifications) + "\n请及时清理文件！"
             logger.warning(f"[{group_id}] 发送容量超限警告: {full_notification}")
             yield event.plain_result(full_notification)
     except ActionFailed as e:
         logger.error(f"[{group_id}] 调用 get_group_file_system_info 失败: {e}")
     except Exception as e:
         logger.error(f"[{group_id}] 处理容量检查时发生未知异常: {e}", exc_info=True)
-
