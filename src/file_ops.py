@@ -7,6 +7,48 @@ from astrbot.api import logger
 from aiocqhttp.exceptions import ActionFailed
 from . import utils
 
+
+def _is_known_invalid_file_error(error: Exception) -> bool:
+    error_text = str(error)
+    return "文件下载失败（-134）" in error_text or "code=-134" in error_text
+
+
+async def is_group_file_invalid(
+    bot,
+    group_id: int,
+    file_id: str,
+    retry_delay_seconds: float = 1.0,
+) -> bool:
+    """仅当文件连续两次命中已知失效特征时，才判定为失效。"""
+
+    async def _check_once() -> bool:
+        try:
+            url_result = await bot.api.call_action('get_group_file_url', group_id=group_id, file_id=file_id)
+            if isinstance(url_result, dict) and url_result.get('url'):
+                return False
+
+            logger.warning(
+                f"[{group_id}] [失效判定] 收到未识别响应，按有效文件处理: "
+                f"file_id={file_id}, response_type={type(url_result).__name__}, response={url_result}"
+            )
+            return False
+        except Exception as e:
+            if _is_known_invalid_file_error(e):
+                return True
+
+            logger.warning(
+                f"[{group_id}] [失效判定] 收到未识别异常，按有效文件处理: "
+                f"file_id={file_id}, error_type={type(e).__name__}, error={e}"
+            )
+            return False
+
+    first_invalid = await _check_once()
+    if not first_invalid:
+        return False
+
+    await asyncio.sleep(retry_delay_seconds)
+    return await _check_once()
+
 async def get_all_files_with_path(group_id: int, bot) -> List[Dict]:
     """递归获取所有文件，并计算其在备份目录中的相对路径。"""
     all_files = []

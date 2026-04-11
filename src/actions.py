@@ -4,7 +4,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from aiocqhttp.exceptions import ActionFailed
 from . import utils
-from .file_ops import get_all_files_recursive_core
+from .file_ops import get_all_files_recursive_core, is_group_file_invalid
 
 async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage_limits: Dict[int, Dict]):
     """统一的定时检查函数，根据auto_delete决定是否删除。"""
@@ -31,27 +31,25 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
                 file_id = file_info.get("file_id")
                 file_name = file_info.get("file_name", "未知文件名")
                 if not file_id: continue
-                try:
-                    await bot.api.call_action('get_group_file_url', group_id=group_id, file_id=file_id)
-                except ActionFailed as e:
-                    if e.result.get('retcode') == 1200:
-                        invalid_files_info.append(file_info)
-                        if auto_delete:
-                            logger.warning(f"[{group_id}] {log_prefix} 发现失效文件 '{file_name}'，尝试删除...")
-                            try:
-                                delete_result = await bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
-                                is_success = False
-                                if delete_result and delete_result.get('transGroupFileResult', {}).get('result', {}).get('retCode') == 0:
-                                    is_success = True
-                                if is_success:
-                                    logger.info(f"[{group_id}] {log_prefix} 成功删除失效文件: '{file_name}'")
-                                    deleted_files.append(file_name)
-                                else:
-                                    logger.error(f"[{group_id}] {log_prefix} 删除失效文件 '{file_name}' 失败，API未返回成功。")
-                                    failed_deletions.append(file_name)
-                            except Exception as del_e:
-                                logger.error(f"[{group_id}] {log_prefix} 删除失效文件 '{file_name}' 时发生异常: {del_e}")
+                is_invalid = await is_group_file_invalid(bot, group_id, file_id)
+                if is_invalid:
+                    invalid_files_info.append(file_info)
+                    if auto_delete:
+                        logger.warning(f"[{group_id}] {log_prefix} 发现失效文件 '{file_name}'，尝试删除...")
+                        try:
+                            delete_result = await bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
+                            is_success = False
+                            if delete_result and delete_result.get('transGroupFileResult', {}).get('result', {}).get('retCode') == 0:
+                                is_success = True
+                            if is_success:
+                                logger.info(f"[{group_id}] {log_prefix} 成功删除失效文件: '{file_name}'")
+                                deleted_files.append(file_name)
+                            else:
+                                logger.error(f"[{group_id}] {log_prefix} 删除失效文件 '{file_name}' 失败，API未返回成功。")
                                 failed_deletions.append(file_name)
+                        except Exception as del_e:
+                            logger.error(f"[{group_id}] {log_prefix} 删除失效文件 '{file_name}' 时发生异常: {del_e}")
+                            failed_deletions.append(file_name)
                 await asyncio.sleep(0.2)
         
         if not invalid_files_info:
@@ -112,12 +110,7 @@ async def perform_batch_check_and_delete(event: AstrMessageEvent):
                 file_id = file_info.get("file_id")
                 file_name = file_info.get("file_name", "未知文件名")
                 if not file_id: continue
-                is_invalid = False
-                try:
-                    await bot.api.call_action('get_group_file_url', group_id=group_id, file_id=file_id)
-                except ActionFailed as e:
-                    if e.result.get('retcode') == 1200:
-                        is_invalid = True
+                is_invalid = await is_group_file_invalid(bot, group_id, file_id)
                 if is_invalid:
                     logger.warning(f"[{group_id}] [批量清理] 发现失效文件 '{file_name}'，尝试删除...")
                     try:
