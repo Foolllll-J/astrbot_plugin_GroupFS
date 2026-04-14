@@ -12,17 +12,17 @@ import astrbot.api.message_components as Comp
 
 from .src import utils
 from .src.file_ops import (
-    get_all_files_with_path, 
-    download_and_save_file, 
-    create_zip_archive, 
-    cleanup_folder, 
+    get_all_files_with_path,
+    download_and_save_file,
+    create_zip_archive,
+    cleanup_folder,
     cleanup_backup_temp,
     get_all_files_recursive_core,
     rename_group_file
 )
 from .src.preview_utils import get_file_preview
 from .src.actions import (
-    perform_scheduled_check, 
+    perform_scheduled_check,
     perform_batch_check_and_delete,
     perform_batch_delete,
     check_storage_and_notify
@@ -31,15 +31,9 @@ from .src.utils import send_report_message
 from .src.backup import perform_group_file_backup
 from .src.duplicate_check import detect_duplicates
 from .src.session_manager import SessionManager
+from .src.sync_service import perform_group_file_sync, format_sync_report
 
 
-@register(
-    "astrbot_plugin_GroupFS",
-    "Foolllll",
-    "QQ群文件管家",
-    "1.1",
-    "https://github.com/Foolllll-J/astrbot_plugin_GroupFS"
-)
 class GroupFSPlugin(Star):
     def __init__(self, context: Context, config: Optional[Dict] = None):
         super().__init__(context)
@@ -49,22 +43,35 @@ class GroupFSPlugin(Star):
         self.cron_configs = []
         self.bot = None
         self.scheduler: Optional[AsyncIOScheduler] = None
-        
-        self.active_tasks = [] 
-        
+
+        self.active_tasks = []
+
         preview_cfg_list = self.config.get("preview_module", [])
         backup_cfg_list = self.config.get("backup_module", [])
         check_cfg_list = self.config.get("check_module", [])
-
-        self._preview_default = {
-            "preview_length": 1000,
-            "default_zip_password": "",
-            "pdf_preview_pages": 1,
-        }
+        sync_cfg_list = []
+        if isinstance(backup_cfg_list, list):
+            for item in backup_cfg_list:
+                if not isinstance(item, dict):
+                    continue
+                template_key = str(item.get("__template_key") or item.get("template") or "").strip()
+                if template_key == "sync":
+                    sync_cfg_list.append(item)
+            
         self._backup_default = {
             "backup_zip_password": "",
             "backup_file_size_limit_mb": 100,
             "backup_file_extensions": "txt,zip",
+        }
+        self._sync_default = {
+            "sync_file_extensions": "",
+            "sync_file_size_limit_mb": 0,
+            "purify_rules": [],
+        }
+        self._preview_default = {
+            "preview_length": 1000,
+            "default_zip_password": "",
+            "pdf_preview_pages": 1,
         }
         self.preview_configs = self._build_group_configs(
             preview_cfg_list, self._preview_default
@@ -74,7 +81,10 @@ class GroupFSPlugin(Star):
         )
 
         self.download_semaphore = asyncio.Semaphore(5)
-        
+
+        self.sync_configs = []
+        self.sync_cron_configs = []
+
         if not isinstance(check_cfg_list, list):
             check_cfg_list = []
 
@@ -115,6 +125,58 @@ class GroupFSPlugin(Star):
                         }
                     )
 
+        if not isinstance(sync_cfg_list, list):
+            sync_cfg_list = []
+
+        for item in sync_cfg_list:
+            if not isinstance(item, dict):
+                logger.warning(f"[群文件同步] 跳过无效 sync 项: item类型={type(item).__name__}")
+                continue
+
+            source_group_id = str(item.get("source_group_id", "")).strip()
+            target_group_id = str(item.get("target_group_id", "")).strip()
+            if not source_group_id or not target_group_id:
+                logger.error(f"[群文件同步] 该 sync 配置缺少 source_group_id/target_group_id，已跳过。当前项: {item}")
+                continue
+
+            try:
+                source_group_id_int = int(source_group_id)
+                target_group_id_int = int(target_group_id)
+            except (TypeError, ValueError):
+                logger.error(f"[群文件同步] 同步配置群号无效: {source_group_id}->{target_group_id}，已跳过。")
+                continue
+
+            sync_cfg = self._sync_default.copy()
+            for k, v in item.items():
+                if k in ("source_group_id", "target_group_id"):
+                    continue
+                if v is not None:
+                    sync_cfg[k] = v
+
+            sync_cfg["source_group_id"] = source_group_id_int
+            sync_cfg["target_group_id"] = target_group_id_int
+            sync_cfg["purify_rules"] = [
+                rule for rule in sync_cfg.get("purify_rules", []) if isinstance(rule, str)
+            ] if isinstance(sync_cfg.get("purify_rules", []), list) else []
+
+            self.sync_configs.append(sync_cfg)
+
+            cron_list = item.get("scheduled_sync_tasks") or []
+            if isinstance(cron_list, list):
+                for cron_str in cron_list:
+                    if not isinstance(cron_str, str) or not cron_str.strip():
+                        continue
+                    if not croniter.croniter.is_valid(cron_str):
+                        logger.error(f"[群文件同步] 无效的 cron 表达式: {cron_str}，已跳过。")
+                        continue
+                    self.sync_cron_configs.append(
+                        {
+                            "source_group_id": source_group_id_int,
+                            "target_group_id": target_group_id_int,
+                            "cron_str": cron_str,
+                        }
+                    )
+
         # 搜索会话管理
         self.search_cache_timeout = 600 # 10分钟
         self.search_results_per_page = 20
@@ -131,8 +193,21 @@ class GroupFSPlugin(Star):
                 seen_tasks.add(task_identifier)
                 unique_configs.append(cfg)
             self.cron_configs = unique_configs
-        
+
+        if self.sync_cron_configs:
+            seen_sync_tasks = set()
+            unique_sync_configs = []
+            for cfg in self.sync_cron_configs:
+                task_identifier = (cfg.get("source_group_id"), cfg.get("target_group_id"), cfg.get("cron_str"))
+                if task_identifier in seen_sync_tasks:
+                    logger.warning(f"检测到重复的同步定时任务配置 '{task_identifier}'，已跳过。")
+                    continue
+                seen_sync_tasks.add(task_identifier)
+                unique_sync_configs.append(cfg)
+            self.sync_cron_configs = unique_sync_configs
+
         logger.info("插件 [群文件系统GroupFS] 已加载。")
+
 
     def _build_group_configs(self, raw_list, defaults: Dict) -> List[Dict]:
         if not isinstance(raw_list, list):
@@ -179,33 +254,37 @@ class GroupFSPlugin(Star):
                         bot_client = platform.get_client()
                     elif hasattr(platform, "bot"):
                         bot_client = platform.bot
-                    
+
                     if bot_client:
                         self.bot = bot_client
                         logger.info(f"[初始化] 成功从 platform_manager 获取 bot 实例")
                         break
             except Exception as e:
                 logger.warning(f"[初始化] 从 platform_manager 获取 bot 实例失败: {e}")
-        
-        # 启动定时任务
-        if self.cron_configs:
-            if self.bot:
-                # 如果已经获取到 bot，直接启动调度器，不需要等待 30 秒
-                logger.info("[定时任务] 启动失效文件检查调度器...")
-                self.scheduler = AsyncIOScheduler()
-                self._register_jobs()
+
+        has_check_jobs = bool(self.cron_configs)
+        has_sync_crons = bool(self.sync_cron_configs)
+
+        if self.bot:
+            if has_check_jobs or has_sync_crons:
+                logger.info("[定时任务] 启动调度器（检查/同步）...")
+                self._start_scheduler()
                 self.scheduler.start()
-            else:
-                # 只有在没获取到 bot 的情况下，才进入延迟启动流程
-                logger.warning("[初始化] 未能立即获取 bot 实例，将通过延迟任务捕获并启动调度器。")
-                asyncio.create_task(self._delayed_start_scheduler())
+            # 无论是否有定时任务，若有同步配置都进行一次启动同步
+            if self.sync_configs:
+                self._schedule_startup_sync()
+            return
+
+        if has_check_jobs or has_sync_crons or self.sync_configs:
+            logger.warning("[初始化] 未能立即获取 bot 实例，将通过延迟流程补获 bot 并启动同步/检查任务。")
+            asyncio.create_task(self._delayed_start_scheduler())
 
     async def _delayed_start_scheduler(self):
         """延迟启动调度器，等待系统初始化并尝试再次获取 bot"""
         try:
             # 等待 30 秒让系统完全初始化
             await asyncio.sleep(30)
-            
+
             # 再次尝试获取 bot
             if not self.bot and hasattr(self.context, "platform_manager"):
                 platforms = self.context.platform_manager.get_insts()
@@ -215,24 +294,65 @@ class GroupFSPlugin(Star):
                         bot_client = platform.get_client()
                     elif hasattr(platform, "bot"):
                         bot_client = platform.bot
-                    
+
                     if bot_client:
                         self.bot = bot_client
                         logger.info("[定时任务] 延迟启动过程中成功补获 bot 实例")
                         break
-            
-            # 启动调度器
-            if not self.scheduler:
-                logger.info("[定时任务] 延迟启动调度器...")
-                self.scheduler = AsyncIOScheduler()
-                self._register_jobs()
-                self.scheduler.start()
-            
+
+            if self.bot and (self.cron_configs or self.sync_cron_configs):
+                if not self.scheduler:
+                    logger.info("[定时任务] 延迟启动调度器...")
+                    self._start_scheduler()
+                    self.scheduler.start()
+                elif not self.scheduler.running:
+                    self.scheduler.start()
+
+            if self.sync_configs:
+                self._schedule_startup_sync()
+
             if not self.bot:
-                logger.warning("[定时任务] 调度器已启动，但尚未获取到 bot 实例。")
-                
+                logger.warning("[定时任务] 尚未获取到 bot 实例，同步/检查任务未启动。")
+
         except Exception as e:
             logger.error(f"[定时任务] 延迟启动失败: {e}", exc_info=True)
+
+    def _start_scheduler(self):
+        if self.scheduler:
+            return
+
+        self.scheduler = AsyncIOScheduler()
+        self._register_jobs()
+
+    def _schedule_startup_sync(self):
+        if getattr(self, "_startup_sync_scheduled", False):
+            return
+
+        if not self.sync_configs:
+            return
+
+        if not self.bot:
+            logger.warning("[群文件同步] 未获取到 bot 实例，延迟启动一次性同步。")
+            return
+
+        self._startup_sync_scheduled = True
+        task = asyncio.create_task(self._run_startup_sync())
+        self.active_tasks.append(task)
+
+    async def _run_startup_sync(self):
+        for sync_cfg in self.sync_configs:
+            try:
+                await self._run_group_sync_job(
+                    sync_cfg["source_group_id"],
+                    sync_cfg["target_group_id"],
+                    sync_cfg,
+                    is_startup=True,
+                )
+            except Exception as e:
+                logger.error(
+                    f"[群文件同步] 启动同步任务异常: source={sync_cfg.get('source_group_id')} -> target={sync_cfg.get('target_group_id')}, error={e}",
+                    exc_info=True,
+                )
 
     def _register_jobs(self):
         """根据配置注册定时任务"""
@@ -240,16 +360,16 @@ class GroupFSPlugin(Star):
             group_id = job_config["group_id"]
             cron_str = job_config["cron_str"]
             auto_delete = bool(job_config.get("auto_delete", False))
-            job_id = f"scheduled_check_{group_id}_{cron_str.replace(' ', '_')}"
-            
+            job_id = f"gfs_check_{group_id}_{cron_str.replace(' ', '_')}"
+
             if self.scheduler.get_job(job_id):
                 logger.warning(f"任务 {job_id} 已存在，跳过注册。")
                 continue
-            
+
             try:
                 cron_parts = cron_str.split()
                 minute, hour, day, month, day_of_week = cron_parts
-                
+
                 self.scheduler.add_job(
                     self._apscheduler_check_task,
                     "cron",
@@ -261,9 +381,45 @@ class GroupFSPlugin(Star):
                     day_of_week=day_of_week,
                     id=job_id
                 )
-                logger.info(f"成功注册定时任务: group_id={group_id}, cron_str='{cron_str}'")
+                logger.info(f"成功注册检查任务: group_id={group_id}, cron_str='{cron_str}'")
             except Exception as e:
-                logger.error(f"注册定时任务 '{cron_str}' 失败: {e}", exc_info=True)
+                logger.error(f"注册检查任务 '{cron_str}' 失败: {e}", exc_info=True)
+
+        for job_config in self.sync_cron_configs:
+            source_group_id = int(job_config["source_group_id"])
+            target_group_id = int(job_config["target_group_id"])
+            cron_str = job_config["cron_str"]
+            job_id = f"gfs_sync_{source_group_id}_{target_group_id}_{cron_str.replace(' ', '_')}"
+
+            if self.scheduler.get_job(job_id):
+                logger.warning(f"任务 {job_id} 已存在，跳过注册。")
+                continue
+
+            try:
+                cron_parts = cron_str.split()
+                minute, hour, day, month, day_of_week = cron_parts
+
+                sync_cfg = self._find_sync_cfg(source_group_id, target_group_id)
+                self.scheduler.add_job(
+                    self._apscheduler_sync_task,
+                    "cron",
+                    args=[source_group_id, target_group_id, sync_cfg],
+                    minute=minute,
+                    hour=hour,
+                    day=day,
+                    month=month,
+                    day_of_week=day_of_week,
+                    id=job_id
+                )
+                logger.info(f"成功注册同步任务: source={source_group_id}, target={target_group_id}, cron_str='{cron_str}'")
+            except Exception as e:
+                logger.error(f"注册同步任务 '{cron_str}' 失败: {e}", exc_info=True)
+
+    def _find_sync_cfg(self, source_group_id: int, target_group_id: int) -> Dict:
+        for cfg in self.sync_configs:
+            if cfg.get("source_group_id") == source_group_id and cfg.get("target_group_id") == target_group_id:
+                return cfg
+        return self._sync_default.copy()
 
     async def _apscheduler_check_task(self, group_id: int, auto_delete: bool):
         """APScheduler 调用的包装函数，负责消费生成器并发送消息"""
@@ -281,6 +437,55 @@ class GroupFSPlugin(Star):
                     threshold=100,
                     node_name=node_name,
                 )
+
+    async def _apscheduler_sync_task(self, source_group_id: int, target_group_id: int, sync_cfg: Dict):
+        await self._run_group_sync_job(source_group_id, target_group_id, sync_cfg)
+
+    async def _run_group_sync_job(self, source_group_id: int, target_group_id: int, sync_cfg: Dict, is_startup: bool = False):
+        if not self.bot:
+            logger.warning(
+                f"[群文件同步] 无法执行同步任务: source={source_group_id}, target={target_group_id}，尚未捕获 bot 实例。"
+            )
+            return
+
+        cfg = self._sync_default.copy()
+        if isinstance(sync_cfg, dict):
+            for k, v in sync_cfg.items():
+                cfg[k] = v
+
+        if cfg.get("source_group_id") is None:
+            cfg["source_group_id"] = source_group_id
+        if cfg.get("target_group_id") is None:
+            cfg["target_group_id"] = target_group_id
+
+        logger.info(f"[群文件同步] 开始执行同步任务: source={source_group_id}, target={target_group_id}")
+
+        stats = await perform_group_file_sync(
+            self.bot,
+            source_group_id,
+            target_group_id,
+            cfg,
+            self.download_semaphore,
+        )
+        report = format_sync_report(stats)
+
+        logger.info(
+            f"[群文件同步] 同步完成: source={source_group_id}, target={target_group_id}, "
+            f"uploaded={stats.get('uploaded')}, renamed={stats.get('renamed')}, moved={stats.get('moved')}, updated={stats.get('updated')}, "
+            f"skipped={stats.get('skipped')}, deleted={stats.get('deleted')}, failed={stats.get('failed')}"
+        )
+
+        has_changes = any(int(stats.get(field, 0) > 0) for field in ("uploaded", "renamed", "moved", "updated", "deleted"))
+        if not has_changes and int(stats.get("failed", 0)) <= 0:
+            return
+
+        await send_report_message(
+            self.bot,
+            target_group_id,
+            report,
+            threshold=100,
+            node_name="群文件同步启动" if is_startup else "群文件同步",
+        )
 
     async def _perform_scheduled_check(self, group_id: int, auto_delete: bool):
         async for res in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits):
@@ -1097,4 +1302,4 @@ class GroupFSPlugin(Star):
         except asyncio.CancelledError:
             pass
         
-        logger.info("插件 [QQ群文件管家] 已卸载。")
+        logger.info("插件 [QQ 群文件管家] 已卸载。")

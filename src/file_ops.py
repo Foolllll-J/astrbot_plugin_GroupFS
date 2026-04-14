@@ -187,30 +187,27 @@ async def rename_group_file(bot, group_id: int, file_id: str, current_parent_dir
     """
     try:
         result = await bot.api.call_action(
-            'rename_group_file', 
-            group_id=group_id, 
-            file_id=file_id, 
-            current_parent_directory=current_parent_directory, 
+            'rename_group_file',
+            group_id=group_id,
+            file_id=file_id,
+            current_parent_directory=current_parent_directory,
             new_name=new_name
         )
-        
-        
-        if not result:
-            return False, "API未返回结果"
-            
-        # 根据日志 {'ok': True} 处理
-        if result.get('ok') is True:
-            return True, "成功"
-        
-        # 失败处理
-        message = result.get('message') or "未知错误"
-        return False, message
-            
+        if not isinstance(result, dict):
+            return False, f"重命名响应异常: {result}"
+
+        ok_flag = result.get("ok")
+        if ok_flag is True or ok_flag in (1, "1", "true", "True"):
+            return True, f"重命名响应: {result}"
+
+        return False, f"重命名失败：响应未命中成功标识, response={result}"
+
     except ActionFailed as e:
         return False, f"API调用失败: {e.result.get('wording', str(e))}"
     except Exception as e:
         logger.error(f"[{group_id}] 重命名文件时发生未知异常: {e}", exc_info=True)
         return False, f"发生内部错误: {str(e)}"
+
 
 async def cleanup_folder(path: str):
     """异步清理文件夹及其内容。"""
