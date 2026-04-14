@@ -71,13 +71,13 @@
 
 ## ⚙️ 配置
 
-首次加载后，请在 AstrBot 后台 -> 插件 页面找到本插件进行设置。所有配置项都有详细的说明和提示。
+首次加载后，请在 AstrBot 后台 -> 插件 页面找到本插件进行设置。所有配置项都有详细的说明和介绍。
 
 ---
 
 ## 📖 使用指南
 
-确保机器人在目标群组拥有管理员权限，否则它可能无法执行某些操作。
+确保 Bot 在目标群组拥有管理员权限，否则它可能无法执行某些操作。
 
 ### 📋 指令列表
 
@@ -137,15 +137,15 @@
 
 > [!CAUTION]
 > 一键备份 (`/gfb`) 指令稳定性取决于备份文件大小，核心问题出在 **Bot 后端 (NapCat/NTQQ) 的大文件上传**，当备份文件较大（超过几百 MB）时，Bot 后端在文件上传过程中容易触发 **网络超时** 或 **内部传输失败**。
-> * **建议搭配清理工具**：由于 NTQQ 客户端传输大文件时会产生大量且可能残留的临时文件，建议搭配 **[astrbot_plugin_napdog](https://github.com/anka-afk/astrbot_plugin_napdog) **使用，新版 Napcat 可安装官方提供的缓存清理工具。
-> * **监控目录**：请确保 `napdog` 或其他清理工具能定时清理以下关键的 NTQQ 内部目录，以下仅供参考：
+> * **建议搭配清理工具**：由于 NTQQ 客户端传输大文件时会产生大量且可能残留的临时文件，建议搭配 [Napdog](https://github.com/anka-afk/astrbot_plugin_napdog) 使用，新版 Napcat 可安装官方提供的缓存清理插件。
+> * **监控目录**：请确保 `Napdog` 或其他清理工具能定时清理以下关键的 NTQQ 内部目录，以下仅供参考：
 >   * `/app/.config/QQ/NapCat/temp/` (NapCat 临时目录)
 >   * `/app/.config/QQ/nt_qq_*/nt_data/File` (NTQQ 核心文件缓存目录)
 > * **本地部署用户**：可以直接访问插件的临时目录（`{data_path}/plugins_data/astrbot_plugin_GroupFS/temp_backup_cache`），手动获取已下载和压缩完成的文件，临时文件将于10分钟后删除。
 
 > [!TIP]
-> * **外部备份方案**：如果您需要云端备份方案，推荐尝试 [OpenList 助手](https://github.com/Foolllll-J/astrbot_plugin_openlistfile)，支持将群文件手动或自动备份到网盘（通过 OpenList）。
-> * **平台备份方案**：如果您需要将群文件备份至其他平台如 Telegram，推荐尝试 [QQ 文件预览](https://github.com/Foolllll-J/astrbot_plugin_file_checker)，支持将新上传的群文件备份至指定会话。
+> * **云端备份方案**：如果您需要云端备份方案，可尝试 [OpenList 助手](https://github.com/Foolllll-J/astrbot_plugin_openlistfile)，支持将群文件手动或自动备份到网盘（通过 OpenList）。
+> * **平台备份方案**：如果您需要将群文件备份至其他平台如 Telegram，可尝试 [QQ 文件预览](https://github.com/Foolllll-J/astrbot_plugin_file_checker)，支持将新上传的群文件备份至指定会话。
 
 ### ⚙️ 自动化功能
 
