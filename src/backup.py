@@ -8,9 +8,30 @@ from astrbot.api.event import AstrMessageEvent
 from astrbot.api.star import StarTools
 from aiocqhttp.exceptions import ActionFailed
 from . import utils
-from .file_ops import get_all_files_with_path, download_and_save_file, create_zip_archive, cleanup_backup_temp
+from .file_ops import (
+    get_all_files_with_path,
+    download_and_save_file,
+    create_zip_archive,
+    cleanup_backup_temp,
+)
 
-async def upload_and_send_file_via_api(event: AstrMessageEvent, bot, file_path: str, file_name: str) -> bool:
+
+def _normalize_action_payload(result):
+    if isinstance(result, dict) and isinstance(result.get("data"), dict):
+        return result.get("data", {})
+    return result if isinstance(result, dict) else {}
+
+
+def _is_llbot_action_success(result) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if result.get("status") == "failed":
+        return False
+    if result.get("status") == "ok" and result.get("retcode") == 0:
+        return True
+    return True
+
+async def upload_and_send_file_via_api(event: AstrMessageEvent, bot, file_path: str, file_name: str, is_llbot: bool = False) -> bool:
     """上传并发送文件。"""
     log_prefix = f"[群文件备份-上传/发送]"
     client = bot or event.bot
@@ -25,20 +46,41 @@ async def upload_and_send_file_via_api(event: AstrMessageEvent, bot, file_path: 
         if group_id_str:
             target_group_id = int(group_id_str)
             logger.info(f"{log_prefix} 调用 /upload_group_file 上传文件到群 {target_group_id}")
-            upload_result = await client.api.call_action('upload_group_file', 
-                                                         group_id=target_group_id,
-                                                         file=file_uri,
-                                                         name=file_name,
-                                                         folder_id='/',
-                                                         timeout=300)
+            if is_llbot:
+                upload_result = await client.api.call_action(
+                    'upload_group_file',
+                    group_id=target_group_id,
+                    file=file_uri,
+                    name=file_name,
+                    folder_id='/',
+                )
+            else:
+                upload_result = await client.api.call_action(
+                    'upload_group_file',
+                    group_id=target_group_id,
+                    file=file_uri,
+                    name=file_name,
+                    folder_id='/',
+                    timeout=300,
+                )
             
         else:
             logger.info(f"{log_prefix} 调用 /upload_private_file 上传文件到私聊 {target_id}")
-            upload_result = await client.api.call_action('upload_private_file', 
-                                                         user_id=target_id,
-                                                         file=file_uri,
-                                                         name=file_name,
-                                                         timeout=300)
+            if is_llbot:
+                upload_result = await client.api.call_action(
+                    'upload_private_file',
+                    user_id=target_id,
+                    file=file_uri,
+                    name=file_name,
+                )
+            else:
+                upload_result = await client.api.call_action(
+                    'upload_private_file',
+                    user_id=target_id,
+                    file=file_uri,
+                    name=file_name,
+                    timeout=300,
+                )
         
         # 2. 检查 upload_result 是否为 None
         if upload_result is None:
@@ -46,6 +88,10 @@ async def upload_and_send_file_via_api(event: AstrMessageEvent, bot, file_path: 
              return True # 视为成功并继续下一个分卷
         
         # 3. 检查 API 响应状态：status='ok' 且 retcode=0 (正常成功)
+        if is_llbot and _is_llbot_action_success(upload_result):
+            logger.info(f"{log_prefix} LLBot upload response accepted as success.")
+            return True
+
         if upload_result.get('status') == 'ok' and upload_result.get('retcode') == 0:
             logger.info(f"{log_prefix} 文件 {file_name} 上传调用成功。")
             return True
@@ -83,7 +129,8 @@ async def perform_group_file_backup(
     backup_file_size_limit_mb: int,
     backup_file_extensions: List[str],
     backup_zip_password: str,
-    date_filter_timestamp: Optional[int] = None
+    date_filter_timestamp: Optional[int] = None,
+    is_llbot: bool = False
 ):
     """执行群文件备份任务。"""
     log_prefix = f"[群文件备份-{group_id}]"
@@ -96,6 +143,7 @@ async def perform_group_file_backup(
         # 1. 预通知：获取群文件系统信息
         logger.info(f"{log_prefix} 正在获取群文件系统原始信息...")
         system_info = await client.api.call_action('get_group_file_system_info', group_id=group_id)
+        system_info = _normalize_action_payload(system_info)
         
         total_count = system_info.get('file_count', '未知')
         
@@ -113,6 +161,7 @@ async def perform_group_file_backup(
 
         # 2. 准备工作：获取群名、创建本地临时目录
         group_info = await client.api.call_action('get_group_info', group_id=group_id)
+        group_info = _normalize_action_payload(group_info)
         group_name = group_info.get('group_name', str(group_id))
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         
@@ -127,7 +176,7 @@ async def perform_group_file_backup(
         
         # 3. 递归获取所有文件信息
         logger.info(f"{log_prefix} 正在获取全量文件列表...")
-        all_files_info = await get_all_files_with_path(group_id, client)
+        all_files_info = await get_all_files_with_path(group_id, client, is_llbot=is_llbot)
         
         # 4. 过滤和下载文件
         downloaded_files_count = 0
@@ -158,7 +207,7 @@ async def perform_group_file_backup(
             
             # 4.3. 下载
             download_success = await download_and_save_file(
-                group_id, file_id, file_name, file_size, relative_path, backup_root_dir, client, download_semaphore
+                group_id, file_id, file_name, file_size, relative_path, backup_root_dir, client, download_semaphore, is_llbot=is_llbot
             )
             
             if download_success:
@@ -223,7 +272,7 @@ async def perform_group_file_backup(
                 all_sent_success = True
                 for volume_path in all_volumes:
                     volume_name = os.path.basename(volume_path)
-                    if not await upload_and_send_file_via_api(event, client, volume_path, volume_name):
+                    if not await upload_and_send_file_via_api(event, client, volume_path, volume_name, is_llbot=is_llbot):
                         all_sent_success = False
                         yield event.plain_result(f"❌ 文件 {volume_name} 发送失败。")
                         break

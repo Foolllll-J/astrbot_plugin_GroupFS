@@ -6,7 +6,23 @@ from aiocqhttp.exceptions import ActionFailed
 from . import utils
 from .file_ops import get_all_files_recursive_core, is_group_file_invalid
 
-async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage_limits: Dict[int, Dict]):
+
+def _is_ob11_action_success(result) -> bool:
+    return isinstance(result, dict) and result.get("status") == "ok" and result.get("retcode") == 0
+
+
+def _is_llbot_action_success(result) -> bool:
+    if result is None:
+        return True
+    if not isinstance(result, dict):
+        return False
+    if _is_ob11_action_success(result):
+        return True
+    if result.get("status") == "failed":
+        return False
+    return True
+
+async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage_limits: Dict[int, Dict], is_llbot: bool = False):
     """统一的定时检查函数，根据auto_delete决定是否删除。"""
     log_prefix = "[清理任务]" if auto_delete else "[检查任务]"
     report_title = "清理报告" if auto_delete else "检查报告"
@@ -17,7 +33,7 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
             return
         
         logger.info(f"[{group_id}] {log_prefix} 开始获取全量文件列表...")
-        all_files = await get_all_files_recursive_core(group_id, bot)
+        all_files = await get_all_files_recursive_core(group_id, bot, is_llbot=is_llbot)
         total_count = len(all_files)
         logger.info(f"[{group_id}] {log_prefix} 获取到 {total_count} 个文件，准备分批检查。")
         invalid_files_info = []
@@ -31,7 +47,7 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
                 file_id = file_info.get("file_id")
                 file_name = file_info.get("file_name", "未知文件名")
                 if not file_id: continue
-                is_invalid = await is_group_file_invalid(bot, group_id, file_id)
+                is_invalid = await is_group_file_invalid(bot, group_id, file_id, is_llbot=is_llbot)
                 if is_invalid:
                     invalid_files_info.append(file_info)
                     if auto_delete:
@@ -39,7 +55,9 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
                         try:
                             delete_result = await bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
                             is_success = False
-                            if delete_result and delete_result.get('transGroupFileResult', {}).get('result', {}).get('retCode') == 0:
+                            if _is_llbot_action_success(delete_result):
+                                is_success = True
+                            elif delete_result and delete_result.get('transGroupFileResult', {}).get('result', {}).get('retCode') == 0:
                                 is_success = True
                             if is_success:
                                 logger.info(f"[{group_id}] {log_prefix} 成功删除失效文件: '{file_name}'")
@@ -91,12 +109,12 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
         if bot:
             yield "❌ 定时任务执行过程中发生内部错误，请检查后台日志。"
 
-async def perform_batch_check_and_delete(event: AstrMessageEvent):
+async def perform_batch_check_and_delete(event: AstrMessageEvent, is_llbot: bool = False):
     group_id = int(event.get_group_id())
     bot = event.bot
     try:
         logger.info(f"[{group_id}] [批量清理] 开始获取全量文件列表...")
-        all_files = await get_all_files_recursive_core(group_id, bot)
+        all_files = await get_all_files_recursive_core(group_id, bot, is_llbot=is_llbot)
         total_count = len(all_files)
         logger.info(f"[{group_id}] [批量清理] 获取到 {total_count} 个文件，准备分批处理。")
         deleted_files = []
@@ -110,13 +128,15 @@ async def perform_batch_check_and_delete(event: AstrMessageEvent):
                 file_id = file_info.get("file_id")
                 file_name = file_info.get("file_name", "未知文件名")
                 if not file_id: continue
-                is_invalid = await is_group_file_invalid(bot, group_id, file_id)
+                is_invalid = await is_group_file_invalid(bot, group_id, file_id, is_llbot=is_llbot)
                 if is_invalid:
                     logger.warning(f"[{group_id}] [批量清理] 发现失效文件 '{file_name}'，尝试删除...")
                     try:
                         delete_result = await bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
                         is_success = False
-                        if delete_result:
+                        if _is_llbot_action_success(delete_result):
+                            is_success = True
+                        elif delete_result:
                             trans_result = delete_result.get('transGroupFileResult', {})
                             result_obj = trans_result.get('result', {})
                             if result_obj.get('retCode') == 0:
@@ -148,7 +168,7 @@ async def perform_batch_check_and_delete(event: AstrMessageEvent):
         logger.error(f"[{group_id}] [批量清理] 执行过程中发生未知异常: {e}", exc_info=True)
         yield event.plain_result("❌ 在执行批量清理时发生内部错误，请检查后台日志。")
 
-async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Dict]):
+async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Dict], is_llbot: bool = False):
     group_id = int(event.get_group_id())
     deleted_files = []
     failed_deletions = []
@@ -164,7 +184,9 @@ async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Di
             logger.info(f"[{group_id}] [批量删除] ({i+1}/{total_count}) 正在删除 '{file_name}'...")
             delete_result = await event.bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
             is_success = False
-            if delete_result:
+            if _is_llbot_action_success(delete_result):
+                is_success = True
+            elif delete_result:
                 trans_result = delete_result.get('transGroupFileResult', {})
                 result_obj = trans_result.get('result', {})
                 if result_obj.get('retCode') == 0:
@@ -189,13 +211,15 @@ async def perform_batch_delete(event: AstrMessageEvent, files_to_delete: List[Di
     logger.info(f"[{group_id}] [批量删除] 任务完成，准备发送报告。")
     yield event.plain_result(report_message)
 
-async def check_storage_and_notify(event: AstrMessageEvent, storage_limits: Dict[int, Dict]):
+async def check_storage_and_notify(event: AstrMessageEvent, storage_limits: Dict[int, Dict], is_llbot: bool = False):
     group_id = int(event.get_group_id())
     if group_id not in storage_limits:
         return
     try:
         client = event.bot
         system_info = await client.api.call_action('get_group_file_system_info', group_id=group_id)
+        if isinstance(system_info, dict) and isinstance(system_info.get("data"), dict):
+            system_info = system_info["data"]
         if not system_info: return
         file_count = system_info.get('file_count', 0)
         used_space_bytes = system_info.get('used_space', 0)

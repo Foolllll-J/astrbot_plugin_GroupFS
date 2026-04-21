@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import croniter
 
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.api import logger
 import astrbot.api.message_components as Comp
 
@@ -18,7 +18,7 @@ from .src.file_ops import (
     cleanup_folder,
     cleanup_backup_temp,
     get_all_files_recursive_core,
-    rename_group_file
+    rename_group_file,
 )
 from .src.preview_utils import get_file_preview
 from .src.actions import (
@@ -42,6 +42,7 @@ class GroupFSPlugin(Star):
         self.storage_limits: Dict[int, Dict] = {}
         self.cron_configs = []
         self.bot = None
+        self._is_llbot = False
         self.scheduler: Optional[AsyncIOScheduler] = None
 
         self.active_tasks = []
@@ -243,6 +244,24 @@ class GroupFSPlugin(Star):
         user_id = int(event.get_sender_id())
         return user_id in self.admin_users
 
+    async def _detect_llbot_backend(self):
+        if not self.bot or not hasattr(self.bot, "api"):
+            return
+
+        try:
+            version_info = await self.bot.api.call_action("get_version_info")
+            app_name = None
+            if isinstance(version_info, dict):
+                app_name = version_info.get("app_name")
+            self._is_llbot = app_name == "LLOneBot"
+            logger.info(
+                f"[GroupFS] 协议端探测结果: app_name={app_name or 'unknown'}, "
+                f"backend={'llbot' if self._is_llbot else 'napcat'}"
+            )
+        except Exception as e:
+            self._is_llbot = False
+            logger.warning(f"[GroupFS] 协议端探测失败，默认按 NapCat 处理: {e}")
+
     async def initialize(self):
         # 尝试从 platform_manager 自动获取 bot 实例
         if hasattr(self.context, "platform_manager"):
@@ -257,6 +276,7 @@ class GroupFSPlugin(Star):
 
                     if bot_client:
                         self.bot = bot_client
+                        await self._detect_llbot_backend()
                         logger.info(f"[初始化] 成功从 platform_manager 获取 bot 实例")
                         break
             except Exception as e:
@@ -297,6 +317,7 @@ class GroupFSPlugin(Star):
 
                     if bot_client:
                         self.bot = bot_client
+                        await self._detect_llbot_backend()
                         logger.info("[定时任务] 延迟启动过程中成功补获 bot 实例")
                         break
 
@@ -427,7 +448,7 @@ class GroupFSPlugin(Star):
             logger.warning(f"[{group_id}] [定时任务] 无法执行，因为尚未捕获到 bot 实例。")
             return
 
-        async for msg in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits):
+        async for msg in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, is_llbot=self._is_llbot):
             if self.bot:
                 node_name = "定时清理报告" if auto_delete else "定时检查报告"
                 await send_report_message(
@@ -466,6 +487,7 @@ class GroupFSPlugin(Star):
             target_group_id,
             cfg,
             self.download_semaphore,
+            is_llbot=self._is_llbot,
         )
         report = format_sync_report(stats)
 
@@ -488,21 +510,21 @@ class GroupFSPlugin(Star):
         )
 
     async def _perform_scheduled_check(self, group_id: int, auto_delete: bool):
-        async for res in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits):
+        async for res in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, is_llbot=self._is_llbot):
             yield res
 
 
     async def _get_all_files_with_path(self, group_id: int, bot) -> List[Dict]:
-        return await get_all_files_with_path(group_id, bot)
+        return await get_all_files_with_path(group_id, bot, is_llbot=self._is_llbot)
     
     async def _get_all_files_recursive_core(self, group_id: int, bot) -> List[Dict]:
         """
         兼容 /cdf, /cf, /sf, /df 等指令。
         """
-        return await get_all_files_recursive_core(group_id, bot)
+        return await get_all_files_recursive_core(group_id, bot, is_llbot=self._is_llbot)
     
     async def _download_and_save_file(self, group_id: int, file_id: str, file_name: str, file_size: int, relative_path: str, root_dir: str, client) -> bool:
-        return await download_and_save_file(group_id, file_id, file_name, file_size, relative_path, root_dir, client, self.download_semaphore)
+        return await download_and_save_file(group_id, file_id, file_name, file_size, relative_path, root_dir, client, self.download_semaphore, is_llbot=self._is_llbot)
 
     async def _cleanup_backup_temp(self, backup_dir: str, zip_path: Optional[str]):
         await cleanup_backup_temp(backup_dir, zip_path)
@@ -523,7 +545,7 @@ class GroupFSPlugin(Star):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
         yield event.plain_result("⚠️ 警告：即将开始扫描并自动删除所有失效文件！\n此过程可能需要几分钟，请耐心等待，完成后将发送报告。")
-        async for res in perform_batch_check_and_delete(event):
+        async for res in perform_batch_check_and_delete(event, is_llbot=self._is_llbot):
             yield res
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -569,7 +591,7 @@ class GroupFSPlugin(Star):
                 yield res
 
     async def _check_storage_and_notify(self, event: AstrMessageEvent):
-        async for res in check_storage_and_notify(event, self.storage_limits):
+        async for res in check_storage_and_notify(event, self.storage_limits, is_llbot=self._is_llbot):
             yield res
     
     def _format_search_results(self, files: List[Dict], search_term: str, for_delete: bool = False) -> str:
@@ -1071,7 +1093,8 @@ class GroupFSPlugin(Star):
                 group_id, 
                 file_id, 
                 parent_id, 
-                new_name
+                new_name,
+                is_llbot=self._is_llbot,
             )
             
             if success:
@@ -1139,7 +1162,12 @@ class GroupFSPlugin(Star):
         try:
             delete_result = await event.bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
             is_success = False
-            if delete_result:
+            if self._is_llbot:
+                if delete_result is None:
+                    is_success = True
+                elif isinstance(delete_result, dict) and delete_result.get("status") != "failed":
+                    is_success = True
+            elif delete_result:
                 trans_result = delete_result.get('transGroupFileResult', {})
                 result_obj = trans_result.get('result', {})
                 if result_obj.get('retCode') == 0:
@@ -1158,7 +1186,7 @@ class GroupFSPlugin(Star):
             yield event.plain_result(f"❌ 删除文件「{file_name}」时发生内部错误。")
 
     async def _perform_batch_delete(self, event: AstrMessageEvent, files_to_delete: List[Dict]):
-        async for res in perform_batch_delete(event, files_to_delete):
+        async for res in perform_batch_delete(event, files_to_delete, is_llbot=self._is_llbot):
             yield res
 
     async def _cleanup_folder(self, path: str):
@@ -1202,7 +1230,8 @@ class GroupFSPlugin(Star):
             int(backup_cfg.get("backup_file_size_limit_mb", 100)),
             backup_file_extensions,
             str(backup_cfg.get("backup_zip_password", "")),
-            date_filter_timestamp
+            date_filter_timestamp,
+            is_llbot=self._is_llbot,
         ):
             yield res
 

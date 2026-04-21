@@ -10,10 +10,36 @@ from astrbot.api import logger
 from astrbot.api.star import StarTools
 from aiocqhttp.exceptions import ActionFailed
 
-from .file_ops import download_and_save_file, get_all_files_with_path, rename_group_file
+from .file_ops import (
+    download_and_save_file,
+    get_all_files_with_path,
+    rename_group_file,
+)
 
 
 SYNC_DEFAULT_SEPARATOR = "/"
+
+
+def _normalize_action_payload(result):
+    if isinstance(result, dict) and isinstance(result.get("data"), dict):
+        return result.get("data", {})
+    return result if isinstance(result, dict) else {}
+
+
+def _is_ob11_action_success(result: Optional[dict]) -> bool:
+    return isinstance(result, dict) and result.get("status") == "ok" and result.get("retcode") == 0
+
+
+def _is_llbot_action_success(result: Optional[dict]) -> bool:
+    if result is None:
+        return True
+    if not isinstance(result, dict):
+        return False
+    if _is_ob11_action_success(result):
+        return True
+    if result.get("status") == "failed":
+        return False
+    return True
 
 
 def _normalize_relative_path(path: str) -> str:
@@ -46,8 +72,13 @@ def _purify_file_name(file_name: str, rules: Optional[list]) -> str:
 
 def _is_move_success_response(result: Optional[dict]) -> bool:
     # move_group_file 成功响应样例：{'ok': True}
+    if result is None:
+        return True
     if not isinstance(result, dict):
         return False
+
+    if _is_ob11_action_success(result):
+        return True
 
     ok_flag = result.get("ok")
     if isinstance(ok_flag, bool):
@@ -63,6 +94,9 @@ def _is_upload_success_response(result: Optional[dict]) -> bool:
     # upload_group_file 成功响应样例：{'file_id': '/xxxx'}
     if not isinstance(result, dict):
         return False
+
+    if _is_llbot_action_success(result):
+        return True
 
     file_id = result.get("file_id")
     if isinstance(file_id, str) and file_id:
@@ -81,8 +115,13 @@ def _is_upload_success_response(result: Optional[dict]) -> bool:
 
 def _is_delete_success_response(result: Optional[dict]) -> bool:
     # NapCat delete_group_file / delete_group_folder 成功响应兼容
+    if result is None:
+        return True
     if not isinstance(result, dict):
         return False
+
+    if _is_llbot_action_success(result):
+        return True
 
     # 文件夹/通用返回： {'retCode': 0, 'retMsg': 'ok', 'clientWording': ''}
     if result.get("retCode") is not None:
@@ -203,56 +242,94 @@ def _pop_unused(items: List[Dict], used_ids: Set[str]) -> Optional[Dict]:
     return None
 
 
-async def _list_group_folders(bot, group_id: int, parent_id: str):
+async def _list_group_folders(bot, group_id: int, parent_id: str, is_llbot: bool = False):
     try:
         if parent_id in ("", "/", None):
-            result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
+            if is_llbot:
+                result = await bot.api.call_action("get_group_root_files", group_id=group_id)
+            else:
+                result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
         else:
-            result = await bot.api.call_action(
-                "get_group_files_by_folder",
-                group_id=group_id,
-                folder_id=parent_id,
-                file_count=2000,
-            )
+            if is_llbot:
+                result = await bot.api.call_action(
+                    "get_group_files_by_folder",
+                    group_id=group_id,
+                    folder_id=parent_id,
+                )
+            else:
+                result = await bot.api.call_action(
+                    "get_group_files_by_folder",
+                    group_id=group_id,
+                    folder_id=parent_id,
+                    file_count=2000,
+                )
 
-        if isinstance(result, dict) and result.get("folders"):
-            return result.get("folders", [])
+        payload = _normalize_action_payload(result)
+        if isinstance(payload, dict) and payload.get("folders"):
+            return payload.get("folders", [])
     except Exception as e:
         logger.warning(f"[群文件同步] 获取目录失败: group_id={group_id}, parent_id={parent_id}, error={e}")
     return []
 
 
 
-async def _list_group_files_by_folder(bot, group_id: int, parent_id: str):
+async def _list_group_files_by_folder(bot, group_id: int, parent_id: str, is_llbot: bool = False):
     try:
         if parent_id in ("", "/", None):
-            result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
+            if is_llbot:
+                result = await bot.api.call_action("get_group_root_files", group_id=group_id)
+            else:
+                result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
         else:
-            result = await bot.api.call_action(
-                "get_group_files_by_folder",
-                group_id=group_id,
-                folder_id=parent_id,
-                file_count=2000,
-            )
+            if is_llbot:
+                result = await bot.api.call_action(
+                    "get_group_files_by_folder",
+                    group_id=group_id,
+                    folder_id=parent_id,
+                )
+            else:
+                result = await bot.api.call_action(
+                    "get_group_files_by_folder",
+                    group_id=group_id,
+                    folder_id=parent_id,
+                    file_count=2000,
+                )
 
-        if isinstance(result, dict) and result.get("files"):
-            return result.get("files", [])
+        payload = _normalize_action_payload(result)
+        if isinstance(payload, dict) and payload.get("files"):
+            return payload.get("files", [])
     except Exception as e:
         logger.warning(f"[群文件同步] 获取目录文件失败: group_id={group_id}, parent_id={parent_id}, error={e}")
     return []
 
 
-async def _create_group_folder(bot, group_id: int, folder_name: str, parent_id: Optional[str]) -> bool:
+async def _create_group_folder(bot, group_id: int, folder_name: str, parent_id: Optional[str], is_llbot: bool = False) -> bool:
     """创建群文件夹。"""
     if not folder_name:
         return False
 
     try:
-        result = await bot.api.call_action(
-            "create_group_file_folder",
-            group_id=group_id,
-            folder_name=folder_name,
-        )
+        if is_llbot:
+            result = await bot.api.call_action(
+                "create_group_file_folder",
+                group_id=group_id,
+                name=folder_name,
+            )
+        else:
+            result = await bot.api.call_action(
+                "create_group_file_folder",
+                group_id=group_id,
+                folder_name=folder_name,
+            )
+
+        if is_llbot:
+            if result is None:
+                await asyncio.sleep(1)
+                return True
+            success = _is_llbot_action_success(result)
+            if success:
+                await asyncio.sleep(1)
+            return success
 
         if not isinstance(result, dict):
             return False
@@ -273,13 +350,19 @@ async def _create_group_folder(bot, group_id: int, folder_name: str, parent_id: 
         return False
 
 
-async def _collect_group_folders(bot, group_id: int) -> List[Dict]:
-    return await _list_group_folders(bot, group_id, "/")
+async def _collect_group_folders(bot, group_id: int, is_llbot: bool = False) -> List[Dict]:
+    return await _list_group_folders(bot, group_id, "/", is_llbot=is_llbot)
 
 
-async def _delete_group_folder(bot, group_id: int, folder_id: str) -> bool:
+async def _delete_group_folder(bot, group_id: int, folder_id: str, is_llbot: bool = False) -> bool:
     try:
-        result = await bot.api.call_action("delete_group_folder", group_id=group_id, folder_id=folder_id, folder=folder_id)
+        if is_llbot:
+            result = await bot.api.call_action("delete_group_folder", group_id=group_id, folder_id=folder_id)
+            if _is_llbot_action_success(result):
+                return True
+        else:
+            result = await bot.api.call_action("delete_group_folder", group_id=group_id, folder_id=folder_id, folder=folder_id)
+
         if _is_delete_success_response(result):
             return True
 
@@ -292,7 +375,7 @@ async def _delete_group_folder(bot, group_id: int, folder_id: str) -> bool:
         return False
 
 
-async def _cleanup_orphan_folders(bot, target_group_id: int, source_folder_names: Set[str], target_folders: List[Dict]) -> Tuple[int, int]:
+async def _cleanup_orphan_folders(bot, target_group_id: int, source_folder_names: Set[str], target_folders: List[Dict], is_llbot: bool = False) -> Tuple[int, int]:
     if not target_folders:
         return 0, 0
 
@@ -311,10 +394,10 @@ async def _cleanup_orphan_folders(bot, target_group_id: int, source_folder_names
     for folder in orphan_folders:
         folder_id = folder.get("folder_id")
         folder_name = folder.get("folder_name")
-        if await _list_group_files_by_folder(bot, target_group_id, folder_id):
+        if await _list_group_files_by_folder(bot, target_group_id, folder_id, is_llbot=is_llbot):
             continue
 
-        if await _delete_group_folder(bot, target_group_id, folder_id):
+        if await _delete_group_folder(bot, target_group_id, folder_id, is_llbot=is_llbot):
             logger.info(f"[群文件同步] 已清理目标端空目录: {folder_name}")
             deleted += 1
             continue
@@ -329,6 +412,7 @@ async def _resolve_folder_id(
     group_id: int,
     parent_path: str,
     folder_cache: Dict[str, str],
+    is_llbot: bool = False,
 ) -> Optional[str]:
     parent_path = _normalize_relative_path(parent_path)
     if not parent_path:
@@ -346,7 +430,7 @@ async def _resolve_folder_id(
             current_parent_id = cached_id
             continue
 
-        folder_list = await _list_group_folders(bot, group_id, current_parent_id)
+        folder_list = await _list_group_folders(bot, group_id, current_parent_id, is_llbot=is_llbot)
         target_folder_id = None
         for folder in folder_list:
             if folder.get("folder_name") == segment:
@@ -354,11 +438,11 @@ async def _resolve_folder_id(
                 break
 
         if target_folder_id is None:
-            created = await _create_group_folder(bot, group_id, segment, current_parent_id)
+            created = await _create_group_folder(bot, group_id, segment, current_parent_id, is_llbot=is_llbot)
             if not created:
                 return None
 
-            folder_list = await _list_group_folders(bot, group_id, current_parent_id)
+            folder_list = await _list_group_folders(bot, group_id, current_parent_id, is_llbot=is_llbot)
             for folder in folder_list:
                 if folder.get("folder_name") == segment:
                     target_folder_id = folder.get("folder_id")
@@ -374,9 +458,12 @@ async def _resolve_folder_id(
     return current_parent_id
 
 
-async def _delete_group_file(bot, group_id: int, file_id: str) -> bool:
+async def _delete_group_file(bot, group_id: int, file_id: str, is_llbot: bool = False) -> bool:
     try:
         result = await bot.api.call_action("delete_group_file", group_id=group_id, file_id=file_id)
+        if is_llbot:
+            if _is_llbot_action_success(result):
+                return True
         if _is_delete_success_response(result):
             return True
 
@@ -389,15 +476,26 @@ async def _delete_group_file(bot, group_id: int, file_id: str) -> bool:
         return False
 
 
-async def _move_group_file(bot, group_id: int, file_id: str, source_parent: str, target_parent: str) -> bool:
+async def _move_group_file(bot, group_id: int, file_id: str, source_parent: str, target_parent: str, is_llbot: bool = False) -> bool:
     try:
-        result = await bot.api.call_action(
-            "move_group_file",
-            group_id=group_id,
-            file_id=file_id,
-            current_parent_directory=source_parent,
-            target_parent_directory=target_parent,
-        )
+        if is_llbot:
+            result = await bot.api.call_action(
+                "move_group_file",
+                group_id=group_id,
+                file_id=file_id,
+                parent_directory=source_parent,
+                target_directory=target_parent,
+            )
+        else:
+            result = await bot.api.call_action(
+                "move_group_file",
+                group_id=group_id,
+                file_id=file_id,
+                current_parent_directory=source_parent,
+                target_parent_directory=target_parent,
+            )
+        if is_llbot and _is_llbot_action_success(result):
+            return True
         if _is_move_success_response(result):
             return True
 
@@ -413,17 +511,30 @@ async def _move_group_file(bot, group_id: int, file_id: str, source_parent: str,
         return False
 
 
-async def _upload_group_file(bot, group_id: int, local_path: str, file_name: str, folder_id: Optional[str]) -> bool:
+async def _upload_group_file(bot, group_id: int, local_path: str, file_name: str, folder_id: Optional[str], is_llbot: bool = False) -> bool:
     try:
-        result = await bot.api.call_action(
-            "upload_group_file",
-            group_id=group_id,
-            file=f"file://{local_path}",
-            name=file_name,
-            folder=folder_id,
-            folder_id=folder_id,
-            timeout=300,
-        )
+        if is_llbot:
+            result = await bot.api.call_action(
+                "upload_group_file",
+                group_id=group_id,
+                file=f"file://{local_path}",
+                name=file_name,
+                folder_id=folder_id,
+            )
+        else:
+            result = await bot.api.call_action(
+                "upload_group_file",
+                group_id=group_id,
+                file=f"file://{local_path}",
+                name=file_name,
+                folder=folder_id,
+                folder_id=folder_id,
+                timeout=300,
+            )
+        if is_llbot and result is None:
+            return True
+        if is_llbot and _is_llbot_action_success(result):
+            return True
         if _is_upload_success_response(result):
             return True
 
@@ -440,7 +551,7 @@ async def _upload_group_file(bot, group_id: int, local_path: str, file_name: str
         return False
 
 
-async def _download_to_temp(bot, source_group_id: int, source_item: Dict, temp_root: str, semaphore: asyncio.Semaphore) -> Tuple[bool, Optional[str]]:
+async def _download_to_temp(bot, source_group_id: int, source_item: Dict, temp_root: str, semaphore: asyncio.Semaphore, is_llbot: bool = False) -> Tuple[bool, Optional[str]]:
     file_id = source_item.get("file_id")
     file_name = source_item.get("file_name") or ""
     file_size = int(source_item.get("size", 0) or 0)
@@ -458,6 +569,7 @@ async def _download_to_temp(bot, source_group_id: int, source_item: Dict, temp_r
         temp_root,
         bot,
         semaphore,
+        is_llbot=is_llbot,
     )
     return ok, local_path if ok else None
 
@@ -470,7 +582,7 @@ async def _cleanup_temp_path(temp_root: str) -> None:
         logger.warning(f"[群文件同步] 临时目录清理失败: {temp_root}, error={e}")
 
 
-async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict], sample_size: int = 2) -> bool:
+async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict], sample_size: int = 2, is_llbot: bool = False) -> bool:
     if not isinstance(file_records, list) or not file_records:
         return True
 
@@ -490,7 +602,8 @@ async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict]
 
         try:
             url_result = await bot.api.call_action("get_group_file_url", group_id=group_id, file_id=file_id)
-            if not (isinstance(url_result, dict) and url_result.get("url")):
+            payload = _normalize_action_payload(url_result)
+            if not (isinstance(payload, dict) and payload.get("url")):
                 logger.warning(
                     f"[群文件同步] 源群快照抽检失败（无法获取下载链接）: source_group={group_id}, file_id={file_id}, file_name={file_name}"
                 )
@@ -504,10 +617,10 @@ async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict]
     return True
 
 
-async def _list_group_files_with_retry(bot, group_id: int, retry: int = 1) -> Optional[List[Dict]]:
+async def _list_group_files_with_retry(bot, group_id: int, retry: int = 1, is_llbot: bool = False) -> Optional[List[Dict]]:
     for idx in range(retry + 1):
         try:
-            return await get_all_files_with_path(group_id, bot)
+            return await get_all_files_with_path(group_id, bot, is_llbot=is_llbot)
         except ActionFailed as e:
             if idx >= retry:
                 logger.error(f"[群文件同步] 获取群文件列表失败: group_id={group_id}, error={e}")
@@ -574,6 +687,7 @@ async def perform_group_file_sync(
     target_group_id: int,
     sync_cfg: Dict,
     download_semaphore: asyncio.Semaphore,
+    is_llbot: bool = False,
 ) -> Dict:
     source_group_id = int(source_group_id)
     target_group_id = int(target_group_id)
@@ -603,8 +717,8 @@ async def perform_group_file_sync(
     used_target_ids: Set[str] = set()
 
     try:
-        source_files = await _list_group_files_with_retry(bot, source_group_id)
-        target_files = await _list_group_files_with_retry(bot, target_group_id)
+        source_files = await _list_group_files_with_retry(bot, source_group_id, is_llbot=is_llbot)
+        target_files = await _list_group_files_with_retry(bot, target_group_id, is_llbot=is_llbot)
         if source_files is None or target_files is None:
             logger.error(
                 f"[群文件同步] 获取源/目标文件列表失败，终止本次同步，避免基于不完整快照误删："
@@ -614,16 +728,17 @@ async def perform_group_file_sync(
             return stats
 
         # 只对源群快照做一次抽检：抽到不存在即认为本次快照不可信，重拉一次后继续
-        if not await _validate_source_snapshot(bot, source_group_id, source_files, sample_size=2):
+        if not await _validate_source_snapshot(bot, source_group_id, source_files, sample_size=2, is_llbot=is_llbot):
             logger.warning(
                 f"[群文件同步] 源群快照抽检失败，重拉源群文件列表: source={source_group_id}, target={target_group_id}"
             )
-            source_files = await _list_group_files_with_retry(bot, source_group_id)
+            source_files = await _list_group_files_with_retry(bot, source_group_id, is_llbot=is_llbot)
             if source_files is None or not await _validate_source_snapshot(
                 bot,
                 source_group_id,
                 source_files,
                 sample_size=2,
+                is_llbot=is_llbot,
             ):
                 logger.error(
                     f"[群文件同步] 源群快照重试后仍异常，终止本次同步（跳过删除）: source={source_group_id}, target={target_group_id}"
@@ -635,8 +750,8 @@ async def perform_group_file_sync(
         target_records = _build_filtered_snapshot(target_files, sync_cfg)
         orphan_records = _build_orphan_snapshot(target_files, sync_cfg)
 
-        source_folders = await _collect_group_folders(bot, source_group_id)
-        target_folders = await _collect_group_folders(bot, target_group_id)
+        source_folders = await _collect_group_folders(bot, source_group_id, is_llbot=is_llbot)
+        target_folders = await _collect_group_folders(bot, target_group_id, is_llbot=is_llbot)
         source_folder_names = {
             folder.get("folder_name")
             for folder in source_folders
@@ -673,6 +788,7 @@ async def perform_group_file_sync(
                 target_group_id,
                 source_parent_path,
                 folder_cache,
+                is_llbot=is_llbot,
             )
             if not target_parent_id:
                 logger.warning(
@@ -694,7 +810,7 @@ async def perform_group_file_sync(
                     continue
 
                 if target_file_id:
-                    delete_ok = await _delete_group_file(bot, target_group_id, target_file_id)
+                    delete_ok = await _delete_group_file(bot, target_group_id, target_file_id, is_llbot=is_llbot)
                     if not delete_ok:
                         logger.warning(
                             f"[群文件同步] 同路径覆盖前删除旧文件失败: target_group={target_group_id}, file_id={target_file_id}"
@@ -708,6 +824,7 @@ async def perform_group_file_sync(
                     source_item,
                     temp_root,
                     download_semaphore,
+                    is_llbot=is_llbot,
                 )
                 if not download_ok or not local_path:
                     logger.warning(
@@ -722,6 +839,7 @@ async def perform_group_file_sync(
                     local_path,
                     source_sanitized_name,
                     target_parent_id,
+                    is_llbot=is_llbot,
                 )
                 if upload_ok:
                     stats["updated"] += 1
@@ -750,6 +868,7 @@ async def perform_group_file_sync(
                         rename_target_id,
                         rename_parent_id,
                         source_sanitized_name,
+                        is_llbot=is_llbot,
                     )
                     if not rename_ok:
                         logger.warning(
@@ -778,6 +897,7 @@ async def perform_group_file_sync(
                     target_group_id,
                     source_parent_path,
                     folder_cache,
+                    is_llbot=is_llbot,
                 )
                 if not target_new_parent_id:
                     stats["failed"] += 1
@@ -791,6 +911,7 @@ async def perform_group_file_sync(
                         move_target_id,
                         source_parent_dir,
                         target_new_parent_id,
+                        is_llbot=is_llbot,
                     )
 
                 if move_ok:
@@ -806,6 +927,7 @@ async def perform_group_file_sync(
                         move_target_id,
                         target_new_parent_id,
                         source_sanitized_name,
+                        is_llbot=is_llbot,
                     )
                     if not rename_ok:
                         logger.warning(
@@ -831,6 +953,7 @@ async def perform_group_file_sync(
                 source_item,
                 temp_root,
                 download_semaphore,
+                is_llbot=is_llbot,
             )
             if not download_ok or not local_path:
                 stats["failed"] += 1
@@ -842,6 +965,7 @@ async def perform_group_file_sync(
                 local_path,
                 source_sanitized_name,
                 target_parent_id,
+                is_llbot=is_llbot,
             )
             if upload_ok:
                 stats["uploaded"] += 1
@@ -861,7 +985,7 @@ async def perform_group_file_sync(
 
             if file_id in used_target_ids:
                 continue
-            if await _delete_group_file(bot, target_group_id, file_id):
+            if await _delete_group_file(bot, target_group_id, file_id, is_llbot=is_llbot):
                 stats["deleted"] += 1
             else:
                 stats["failed"] += 1
@@ -871,6 +995,7 @@ async def perform_group_file_sync(
             target_group_id,
             source_folder_names,
             target_folders,
+            is_llbot=is_llbot,
         )
         stats["deleted"] += deleted_folders
         stats["failed"] += failed_folders
