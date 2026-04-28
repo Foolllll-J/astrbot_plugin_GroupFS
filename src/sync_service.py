@@ -977,6 +977,7 @@ async def perform_group_file_sync(
         for target_item in orphan_records:
             target_effective_path = target_item.get("effective_path")
             file_id = target_item.get("file_id")
+            target_file_name = target_item.get("file_name")
             if not file_id:
                 logger.warning(
                     f"[群文件同步] 跳过无 file_id 的目标项: file_name={target_item.get('file_name')}, effective_path={target_effective_path}"
@@ -986,6 +987,10 @@ async def perform_group_file_sync(
             if file_id in used_target_ids:
                 continue
             if await _delete_group_file(bot, target_group_id, file_id, is_llbot=is_llbot):
+                logger.info(
+                    f"[群文件同步] 已删除目标端文件: target_group={target_group_id}, "
+                    f"file_id={file_id}, file_name={target_file_name}, effective_path={target_effective_path}"
+                )
                 stats["deleted"] += 1
             else:
                 stats["failed"] += 1

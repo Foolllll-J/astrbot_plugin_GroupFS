@@ -187,7 +187,7 @@ async def download_and_save_file(
                         async for chunk in resp.content.iter_chunked(8192):
                             f.write(chunk)
 
-        logger.info(f"{log_prefix} 成功下载文件 '{file_name}' ({utils.format_bytes(file_size)}) 到: {target_path}")
+        logger.debug(f"{log_prefix} 成功下载文件 '{file_name}' ({utils.format_bytes(file_size)}) 到: {target_path}")
         return True
     except ActionFailed as e:
         logger.warning(f"{log_prefix} 下载文件 '{file_name}' 失败 (API错误): {e}")
