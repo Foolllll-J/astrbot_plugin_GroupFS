@@ -244,6 +244,30 @@ class GroupFSPlugin(Star):
         user_id = int(event.get_sender_id())
         return user_id in self.admin_users
 
+    def _is_supported_bot_client(self, client) -> bool:
+        return bool(client and hasattr(client, "api") and hasattr(client.api, "call_action"))
+
+    async def _try_bind_bot_from_platform_manager(self) -> bool:
+        platform = self.context.get_platform(filter.PlatformAdapterType.AIOCQHTTP)
+        if not platform or not hasattr(platform, "get_client"):
+            return False
+        bot_client = platform.get_client()
+        if not self._is_supported_bot_client(bot_client):
+            return False
+        self.bot = bot_client
+        await self._detect_llbot_backend()
+        logger.info("[GroupFS] 已绑定 AIOCQHTTP OneBot 客户端")
+        return True
+
+    async def _ensure_event_bot_bound(self, event: AstrMessageEvent):
+        if self._is_supported_bot_client(self.bot):
+            return
+        candidate = getattr(event, "bot", None)
+        if self._is_supported_bot_client(candidate):
+            self.bot = candidate
+            await self._detect_llbot_backend()
+            logger.info("[GroupFS] 已切换到当前事件来源的 OneBot 客户端")
+
     async def _detect_llbot_backend(self):
         if not self.bot or not hasattr(self.bot, "api"):
             return
@@ -264,23 +288,10 @@ class GroupFSPlugin(Star):
 
     async def initialize(self):
         # 尝试从 platform_manager 自动获取 bot 实例
-        if hasattr(self.context, "platform_manager"):
-            try:
-                platforms = self.context.platform_manager.get_insts()
-                for platform in platforms:
-                    bot_client = None
-                    if hasattr(platform, "get_client"):
-                        bot_client = platform.get_client()
-                    elif hasattr(platform, "bot"):
-                        bot_client = platform.bot
-
-                    if bot_client:
-                        self.bot = bot_client
-                        await self._detect_llbot_backend()
-                        logger.info(f"[初始化] 成功从 platform_manager 获取 bot 实例")
-                        break
-            except Exception as e:
-                logger.warning(f"[初始化] 从 platform_manager 获取 bot 实例失败: {e}")
+        try:
+            await self._try_bind_bot_from_platform_manager()
+        except Exception as e:
+            logger.warning(f"[GroupFS] 从 platform_manager 绑定 OneBot 客户端失败: {e}")
 
         has_check_jobs = bool(self.cron_configs)
         has_sync_crons = bool(self.sync_cron_configs)
@@ -307,19 +318,7 @@ class GroupFSPlugin(Star):
 
             # 再次尝试获取 bot
             if not self.bot and hasattr(self.context, "platform_manager"):
-                platforms = self.context.platform_manager.get_insts()
-                for platform in platforms:
-                    bot_client = None
-                    if hasattr(platform, "get_client"):
-                        bot_client = platform.get_client()
-                    elif hasattr(platform, "bot"):
-                        bot_client = platform.bot
-
-                    if bot_client:
-                        self.bot = bot_client
-                        await self._detect_llbot_backend()
-                        logger.info("[定时任务] 延迟启动过程中成功补获 bot 实例")
-                        break
+                await self._try_bind_bot_from_platform_manager()
 
             if self.bot and (self.cron_configs or self.sync_cron_configs):
                 if not self.scheduler:
@@ -533,7 +532,7 @@ class GroupFSPlugin(Star):
     @filter.command("cdf", alias={"清理失效文件","清理失效群文件"})
     async def on_check_and_delete_command(self, event: AstrMessageEvent):
         """扫描并自动删除所有失效文件"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -552,7 +551,7 @@ class GroupFSPlugin(Star):
     @filter.command("cf", alias={"检查群文件"})
     async def on_check_files_command(self, event: AstrMessageEvent):
         """扫描并查找群内的失效文件（仅检查不删除）"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -563,18 +562,22 @@ class GroupFSPlugin(Star):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
         logger.info(f"[{group_id}] 用户 {user_id} 触发 /cf 失效文件检查指令。")
-        yield event.plain_result("✅ 已开始扫描群内所有文件，查找失效文件...\n这可能需要几分钟，请耐心等待。\n如果未发现失效文件，将不会发送任何消息。")
+        yield event.plain_result("已开始扫描群内所有文件，查找失效文件...\n这可能需要几分钟，请耐心等待。")
+        has_report = False
         async for res in self._perform_scheduled_check(group_id, False):
+            has_report = True
             if isinstance(res, str):
                 yield event.plain_result(res)
             else:
                 yield res
+        if not has_report:
+            yield event.plain_result("✅ 检查完成，未发现失效文件。")
     
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=10)
     async def on_group_file_upload(self, event: AstrMessageEvent):
         """监控群文件上传事件"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         file_component = next((seg for seg in event.get_messages() if isinstance(seg, Comp.File)), None)
         if file_component:
             group_id = int(event.get_group_id())
@@ -601,7 +604,7 @@ class GroupFSPlugin(Star):
     @filter.command("sf", alias={"搜索"})
     async def on_search_file_command(self, event: AstrMessageEvent):
         """搜索群文件"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -803,7 +806,7 @@ class GroupFSPlugin(Star):
     @filter.command("preview", alias={"预览"})
     async def on_preview_command(self, event: AstrMessageEvent):
         """预览群文件内容"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -893,7 +896,7 @@ class GroupFSPlugin(Star):
     @filter.command("df", alias={"删除"})
     async def on_delete_file_command(self, event: AstrMessageEvent):
         """删除指定的群文件"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -1012,7 +1015,7 @@ class GroupFSPlugin(Star):
     @filter.command("rn", alias={"重命名"})
     async def on_rename_command(self, event: AstrMessageEvent):
         """重命名指定的群文件"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -1239,7 +1242,7 @@ class GroupFSPlugin(Star):
     @filter.command("ddf", alias={"重复文件检测","重复群文件检测","群文件查重"})
     async def on_detect_duplicates_command(self, event: AstrMessageEvent):
         """检测群文件中的重复文件（使用LLM分析）"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         group_id_str = event.get_group_id()
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
@@ -1262,7 +1265,7 @@ class GroupFSPlugin(Star):
     @filter.command("gfb", alias={"备份群文件","群文件备份"})
     async def on_group_file_backup_command(self, event: AstrMessageEvent):
         """备份指定群聊或当前群聊的群文件"""
-        if not self.bot: self.bot = event.bot
+        await self._ensure_event_bot_bound(event)
         
         # 1. 解析目标群ID和日期参数
         group_id_str = event.get_group_id()
