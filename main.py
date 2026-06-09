@@ -92,25 +92,19 @@ class GroupFSPlugin(Star):
         for item in check_cfg_list:
             if not isinstance(item, dict):
                 continue
-            group_id = str(item.get("group_id", "")).strip()
-            if not group_id:
-                continue
-            try:
-                group_id = int(group_id)
-            except (TypeError, ValueError):
-                logger.error(f"检查配置中群号无效: {group_id}，已跳过。")
+            raw_ids = item.get("group_id", [])
+            if not isinstance(raw_ids, list):
+                raw_ids = [str(raw_ids).strip()] if str(raw_ids).strip() else []
+            group_ids = [str(g).strip() for g in raw_ids if str(g).strip()]
+            if not group_ids:
                 continue
 
             count_limit = item.get("count_limit", 0)
             space_limit_gb = item.get("space_limit_gb", 0)
-            if count_limit > 0 or space_limit_gb > 0:
-                self.storage_limits[group_id] = {
-                    "count_limit": int(count_limit),
-                    "space_limit_gb": float(space_limit_gb),
-                }
 
             cron_list = item.get("scheduled_check_tasks") or []
             auto_delete = bool(item.get("scheduled_autodelete", False))
+            valid_crons = []
             if isinstance(cron_list, list):
                 for cron_str in cron_list:
                     if not isinstance(cron_str, str) or not cron_str.strip():
@@ -118,9 +112,24 @@ class GroupFSPlugin(Star):
                     if not croniter.croniter.is_valid(cron_str):
                         logger.error(f"无效的 cron 表达式: {cron_str}，已跳过。")
                         continue
+                    valid_crons.append(cron_str)
+
+            for gid_str in group_ids:
+                try:
+                    gid_int = int(gid_str)
+                except (TypeError, ValueError):
+                    logger.error(f"检查配置中群号无效: {gid_str}，已跳过。")
+                    continue
+
+                if count_limit > 0 or space_limit_gb > 0:
+                    self.storage_limits[gid_int] = {
+                        "count_limit": int(count_limit),
+                        "space_limit_gb": float(space_limit_gb),
+                    }
+                for cron_str in valid_crons:
                     self.cron_configs.append(
                         {
-                            "group_id": group_id,
+                            "group_id": gid_int,
                             "cron_str": cron_str,
                             "auto_delete": auto_delete,
                         }
@@ -217,24 +226,27 @@ class GroupFSPlugin(Star):
         for item in raw_list:
             if not isinstance(item, dict):
                 continue
-            group_id = str(item.get("group_id", "")).strip()
+            raw_ids = item.get("group_id", [])
+            if not isinstance(raw_ids, list):
+                raw_ids = [str(raw_ids).strip()] if str(raw_ids).strip() else []
+            group_ids = [str(g).strip() for g in raw_ids if str(g).strip()]
             cfg = defaults.copy()
             for k, v in item.items():
                 if k == "group_id":
                     continue
                 if v is not None:
                     cfg[k] = v
-            cfg["group_id"] = group_id
+            cfg["group_ids"] = group_ids
             configs.append(cfg)
         return configs
 
     def _get_group_config(self, group_id: int, configs: List[Dict], defaults: Dict):
         gid = str(group_id)
         for cfg in configs:
-            if cfg.get("group_id") == gid:
+            if gid in cfg.get("group_ids", []):
                 return cfg
         for cfg in configs:
-            if cfg.get("group_id") == "":
+            if not cfg.get("group_ids"):
                 return cfg
         return defaults
 

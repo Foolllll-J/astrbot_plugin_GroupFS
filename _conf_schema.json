@@ -11,7 +11,8 @@
         "hint": "按群配置预览参数，群号为空表示全局生效。",
         "default": [
             {
-                "group_id": "",
+                "__template_key": "default",
+                "group_id": [],
                 "preview_length": 1000,
                 "default_zip_password": "",
                 "pdf_preview_pages": 1
@@ -23,9 +24,9 @@
                 "items": {
                     "group_id": {
                         "description": "群号",
-                        "hint": "为空表示全局生效。",
-                        "type": "string",
-                        "default": ""
+                        "hint": "配置目标群号，留空表示全局生效。",
+                        "type": "list",
+                        "default": []
                     },
                     "preview_length": {
                         "description": "文本预览长度 (字符)",
@@ -57,10 +58,11 @@
     "check_module": {
         "type": "template_list",
         "description": "文件检查",
-        "hint": "配置单个群的容量监控与定时检查任务。",
+        "hint": "按群配置容量监控与定时检查任务，群号为空表示不生效。",
         "default": [
             {
-                "group_id": "",
+                "__template_key": "default",
+                "group_id": [],
                 "scheduled_check_tasks": [],
                 "scheduled_autodelete": false,
                 "count_limit": 0,
@@ -74,8 +76,8 @@
                     "group_id": {
                         "description": "群号",
                         "hint": "配置目标群号，留空表示不生效。",
-                        "type": "string",
-                        "default": ""
+                        "type": "list",
+                        "default": []
                     },
                     "scheduled_check_tasks": {
                         "description": "定时失效文件检查任务",
@@ -121,7 +123,8 @@
         "hint": "按群配置备份参数，群号为空表示全局生效。",
         "default": [
             {
-                "group_id": "",
+                "__template_key": "default",
+                "group_id": [],
                 "backup_zip_password": "",
                 "backup_file_size_limit_mb": 100,
                 "backup_file_extensions": "txt,zip"
@@ -133,9 +136,9 @@
                 "items": {
                     "group_id": {
                         "description": "群号",
-                        "hint": "为空表示全局生效。",
-                        "type": "string",
-                        "default": ""
+                        "hint": "配置目标群号，留空表示全局生效。",
+                        "type": "list",
+                        "default": []
                     },
                     "backup_zip_password": {
                         "description": "备份压缩包加密密码",
