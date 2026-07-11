@@ -681,6 +681,106 @@ def format_sync_report(stats: Dict) -> str:
     )
 
 
+async def _rename_group_folder_direct(
+    bot, group_id: int, folder_id: str, new_name: str, is_llbot: bool = False
+) -> bool:
+    """直接调 API 重命名文件夹（LLOneBot / SnowLuma）。"""
+    try:
+        result = await bot.api.call_action(
+            "rename_group_file_folder",
+            group_id=group_id,
+            folder_id=folder_id,
+            new_folder_name=new_name,
+        )
+
+        if is_llbot and result is None:
+            await asyncio.sleep(1)
+            return True
+        if is_llbot and _is_llbot_action_success(result):
+            await asyncio.sleep(1)
+            return True
+
+        if isinstance(result, dict):
+            inner = result.get("result")
+            if isinstance(inner, dict):
+                ok = inner.get("retCode") == 0 and inner.get("retMsg") == "ok"
+                if ok:
+                    await asyncio.sleep(1)
+                    return ok
+
+        logger.warning(
+            f"[群文件同步] rename_group_file_folder 响应异常: group_id={group_id}, "
+            f"folder_id={folder_id}, new_name={new_name}, result={result}"
+        )
+        return False
+    except Exception as e:
+        logger.warning(
+            f"[群文件同步] rename_group_file_folder 失败: group_id={group_id}, "
+            f"folder_id={folder_id}, new_name={new_name}, error={e}"
+        )
+        return False
+
+
+async def _simulate_folder_rename(
+    bot, group_id: int, old_folder_id: str, new_name: str, is_llbot: bool = False
+) -> bool:
+    """
+    NapCat 无 rename_group_folder API，模拟改名：
+    1. 创建同名新文件夹
+    2. 列出旧文件夹下所有文件
+    3. 逐个移动到新文件夹
+    4. 删除旧文件夹
+    """
+    # 1. 创建新文件夹
+    created = await _create_group_folder(bot, group_id, new_name, "/", is_llbot=is_llbot)
+    if not created:
+        logger.warning(f"[群文件同步] 模拟改名：创建新文件夹失败: group_id={group_id}, new_name={new_name}")
+        return False
+
+    # 2. 找到新文件夹的 folder_id
+    folders = await _list_group_folders(bot, group_id, "/", is_llbot=is_llbot)
+    new_folder_id = None
+    for f in folders:
+        if f.get("folder_name") == new_name:
+            new_folder_id = f.get("folder_id")
+            break
+
+    if not new_folder_id:
+        logger.warning(f"[群文件同步] 模拟改名：无法找到刚创建的新文件夹: new_name={new_name}")
+        return False
+
+    # 3. 列出旧文件夹下所有文件
+    files = await _list_group_files_by_folder(bot, group_id, old_folder_id, is_llbot=is_llbot)
+
+    # 4. 逐个移动到新文件夹
+    for f in files:
+        fid = f.get("file_id")
+        if not fid:
+            continue
+        old_parent = f.get("parent_id") or old_folder_id
+        move_ok = await _move_group_file(bot, group_id, fid, old_parent, new_folder_id, is_llbot=is_llbot)
+        if not move_ok:
+            logger.warning(
+                f"[群文件同步] 模拟改名：移动文件失败: group_id={group_id}, file_id={fid}, "
+                f"old_folder={old_folder_id}, new_folder={new_folder_id}"
+            )
+
+    # 5. 删除旧文件夹（等所有文件移走）
+    delete_ok = await _delete_group_folder(bot, group_id, old_folder_id, is_llbot=is_llbot)
+    if not delete_ok and files:
+        logger.warning(
+            f"[群文件同步] 模拟改名：旧文件夹删除失败，"
+            f"可能仍有文件残留: group_id={group_id}, old_folder_id={old_folder_id}"
+        )
+
+    logger.info(
+        f"[群文件同步] 模拟改名完成: group_id={group_id}, "
+        f"old_folder_id={old_folder_id}, new_name={new_name}, new_folder_id={new_folder_id}, "
+        f"moved_files={len(files)}, delete_old_ok={delete_ok}"
+    )
+    return True
+
+
 async def perform_group_file_sync(
     bot,
     source_group_id: int,
@@ -688,7 +788,9 @@ async def perform_group_file_sync(
     sync_cfg: Dict,
     download_semaphore: asyncio.Semaphore,
     is_llbot: bool = False,
-) -> Dict:
+    rename_folder_available: bool = False,
+    folder_map: Optional[Dict] = None,
+) -> Tuple[Dict, Optional[Dict]]:
     source_group_id = int(source_group_id)
     target_group_id = int(target_group_id)
 
@@ -725,7 +827,7 @@ async def perform_group_file_sync(
                 f"source_files_present={source_files is not None}, target_files_present={target_files is not None}"
             )
             stats["failed"] += 1
-            return stats
+            return stats, folder_map
 
         # 只对源群快照做一次抽检：抽到不存在即认为本次快照不可信，重拉一次后继续
         if not await _validate_source_snapshot(bot, source_group_id, source_files, sample_size=2, is_llbot=is_llbot):
@@ -744,7 +846,7 @@ async def perform_group_file_sync(
                     f"[群文件同步] 源群快照重试后仍异常，终止本次同步（跳过删除）: source={source_group_id}, target={target_group_id}"
                 )
                 stats["failed"] += 1
-                return stats
+                return stats, folder_map
 
         source_records = _build_filtered_snapshot(source_files, sync_cfg)
         target_records = _build_filtered_snapshot(target_files, sync_cfg)
@@ -766,6 +868,53 @@ async def perform_group_file_sync(
                 parent_dir = _parent_path(raw_relative_path)
                 if parent_dir:
                     source_folder_names.add(parent_dir.split("/")[0])
+
+        # === 文件夹改名检测 ===
+        if folder_map is not None and source_folders:
+            changed = False
+            folders_dict = folder_map.setdefault("folders", {})
+            for src_folder in source_folders:
+                src_fid = src_folder.get("folder_id")
+                src_name = src_folder.get("folder_name")
+                if not src_fid or not src_name:
+                    continue
+
+                stored = folders_dict.get(src_fid)
+                if stored and stored.get("name") and stored["name"] != src_name:
+                    old_name = stored["name"]
+                    target_fid = stored.get("target_id")
+                    logger.info(
+                        f"[群文件同步] 检测到源文件夹改名: folder_id={src_fid}, "
+                        f"'{old_name}' -> '{src_name}', target_folder_id={target_fid}"
+                    )
+
+                    if target_fid:
+                        ok = False
+                        if rename_folder_available:
+                            ok = await _rename_group_folder_direct(
+                                bot, target_group_id, target_fid, src_name, is_llbot=is_llbot
+                            )
+                        if not ok:
+                            # 直接改名失败或无 API，降级为模拟改名
+                            ok = await _simulate_folder_rename(
+                                bot, target_group_id, target_fid, src_name, is_llbot=is_llbot
+                            )
+
+                        if ok:
+                            stored["name"] = src_name
+                            changed = True
+                            stats["renamed"] += 1
+                            logger.info(
+                                f"[群文件同步] 目标端文件夹改名成功: folder_id={target_fid}, "
+                                f"'{old_name}' -> '{src_name}'"
+                            )
+
+            if changed:
+                target_folders = await _collect_group_folders(bot, target_group_id, is_llbot=is_llbot)
+                target_files = await _list_group_files_with_retry(bot, target_group_id, is_llbot=is_llbot)
+                if target_files is not None:
+                    target_records = _build_filtered_snapshot(target_files, sync_cfg)
+                    orphan_records = _build_orphan_snapshot(target_files, sync_cfg)
 
         stats["source_total"] = len(source_files)
         stats["source_filtered"] = len(source_records)
@@ -1006,11 +1155,111 @@ async def perform_group_file_sync(
         stats["failed"] += failed_folders
 
         stats["duration_ms"] = int((asyncio.get_event_loop().time() - start_ts) * 1000)
-        return stats
+
+        # 更新 folder_map 中的 source_folder_id → target_folder_id 绑定
+        if source_folders and folder_map is not None:
+            after_target_folders = await _collect_group_folders(bot, target_group_id, is_llbot=is_llbot)
+            target_by_name = {
+                f["folder_name"]: f["folder_id"]
+                for f in after_target_folders
+                if f.get("folder_name") and f.get("folder_id")
+            }
+            folders_dict = folder_map.setdefault("folders", {})
+            for src_folder in source_folders:
+                src_fid = src_folder.get("folder_id")
+                src_name = src_folder.get("folder_name")
+                if not src_fid or not src_name:
+                    continue
+                entry = folders_dict.setdefault(src_fid, {"name": src_name})
+                entry["name"] = src_name
+                if src_name in target_by_name:
+                    entry["target_id"] = target_by_name[src_name]
+
+        return stats, folder_map
 
     except Exception as e:
         logger.error(f"[群文件同步] 执行异常: source={source_group_id}, target={target_group_id}, error={e}", exc_info=True)
         stats["failed"] += 1
-        return stats
+        return stats, folder_map
     finally:
         asyncio.create_task(_cleanup_temp_path(temp_root))
+
+
+async def sync_command_handler(event, sync_configs, default_cfg, bot, run_sync_job, is_admin):
+    """/gfs 同步指令实现"""
+    if not is_admin:
+        yield event.plain_result("⚠️ 您没有执行此操作的权限。")
+        return
+
+    if not bot:
+        yield event.plain_result("❌ 无法获取 bot 实例。")
+        return
+
+    command_parts = event.message_str.split()
+
+    # 无参数：在当前群智能匹配
+    if len(command_parts) < 2:
+        group_id_str = event.get_group_id()
+        if not group_id_str:
+            yield event.plain_result("❌ 无参数时此指令只能在群聊中使用。\n用法: /gfs all 或 /gfs <源群号> <目标群号>")
+            return
+        current_gid = int(group_id_str)
+
+        matched = []
+        for cfg in sync_configs:
+            if cfg["source_group_id"] == current_gid:
+                matched.append(("push", cfg))
+            if cfg["target_group_id"] == current_gid:
+                matched.append(("pull", cfg))
+
+        if not matched:
+            yield event.plain_result(f"当前群 {current_gid} 没有关联任何同步配置。")
+            return
+
+        yield event.plain_result(f"🔄 找到 {len(matched)} 个关联的同步任务，开始执行...")
+        for mode, cfg in matched:
+            tag = "⏫ 推送" if mode == "push" else "⏬ 拉取"
+            yield event.plain_result(f"{tag}: 源 {cfg['source_group_id']} → 目标 {cfg['target_group_id']}")
+            try:
+                await run_sync_job(cfg["source_group_id"], cfg["target_group_id"], cfg)
+            except Exception as e:
+                logger.error(f"[/gfs] 同步异常: {e}", exc_info=True)
+                yield event.plain_result(f"❌ 同步失败: {e}")
+        return
+
+    # /gfs all
+    if command_parts[1].lower() == "all":
+        if not sync_configs:
+            yield event.plain_result("⚠️ 没有配置任何同步任务。")
+            return
+        yield event.plain_result(f"🔄 开始执行所有 {len(sync_configs)} 个同步任务...")
+        for cfg in sync_configs:
+            try:
+                await run_sync_job(cfg["source_group_id"], cfg["target_group_id"], cfg)
+            except Exception as e:
+                logger.error(f"[/gfs all] 同步异常: {e}", exc_info=True)
+                yield event.plain_result(f"❌ 同步异常 (源 {cfg['source_group_id']} → 目标 {cfg['target_group_id']}): {e}")
+        return
+
+    # /gfs <源群号> <目标群号>
+    if len(command_parts) >= 3:
+        try:
+            src = int(command_parts[1])
+            dst = int(command_parts[2])
+        except ValueError:
+            yield event.plain_result("❌ 群号格式错误。用法: /gfs <源群号> <目标群号>")
+            return
+
+        cfg = default_cfg.copy()
+        cfg["source_group_id"] = src
+        cfg["target_group_id"] = dst
+
+        yield event.plain_result(f"🔄 开始同步: 源 {src} → 目标 {dst}")
+        try:
+            await run_sync_job(src, dst, cfg)
+        except Exception as e:
+            logger.error(f"[/gfs] 同步异常: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 同步失败: {e}")
+        return
+
+    yield event.plain_result("❓ 用法: /gfs (当前群关联同步) 或 /gfs all 或 /gfs <源群号> <目标群号>")

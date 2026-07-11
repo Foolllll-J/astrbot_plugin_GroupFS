@@ -46,7 +46,8 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
             for file_info in batch:
                 file_id = file_info.get("file_id")
                 file_name = file_info.get("file_name", "未知文件名")
-                if not file_id: continue
+                if not file_id:
+                    continue
                 is_invalid = await is_group_file_invalid(bot, group_id, file_id, is_llbot=is_llbot)
                 if is_invalid:
                     invalid_files_info.append(file_info)
@@ -82,7 +83,7 @@ async def perform_scheduled_check(group_id: int, auto_delete: bool, bot, storage
             if failed_deletions:
                 report_message += f"\n- 删除失败: {len(failed_deletions)} 个"
             if not deleted_files and not failed_deletions:
-                 report_message += f"但未成功删除任何文件。"
+                 report_message += "但未成功删除任何文件。"
             
             report_message += "\n" + "-" * 20
             for info in invalid_files_info:
@@ -127,7 +128,8 @@ async def perform_batch_check_and_delete(event: AstrMessageEvent, is_llbot: bool
             for file_info in batch:
                 file_id = file_info.get("file_id")
                 file_name = file_info.get("file_name", "未知文件名")
-                if not file_id: continue
+                if not file_id:
+                    continue
                 is_invalid = await is_group_file_invalid(bot, group_id, file_id, is_llbot=is_llbot)
                 if is_invalid:
                     logger.warning(f"[{group_id}] [批量清理] 发现失效文件 '{file_name}'，尝试删除...")
@@ -220,7 +222,8 @@ async def check_storage_and_notify(event: AstrMessageEvent, storage_limits: Dict
         system_info = await client.api.call_action('get_group_file_system_info', group_id=group_id)
         if isinstance(system_info, dict) and isinstance(system_info.get("data"), dict):
             system_info = system_info["data"]
-        if not system_info: return
+        if not system_info:
+            return
         file_count = system_info.get('file_count', 0)
         used_space_bytes = system_info.get('used_space', 0)
         used_space_gb = float(utils.format_bytes(used_space_bytes, 'GB'))

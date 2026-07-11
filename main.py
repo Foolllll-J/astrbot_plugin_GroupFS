@@ -25,13 +25,13 @@ from .src.actions import (
     perform_scheduled_check,
     perform_batch_check_and_delete,
     perform_batch_delete,
-    check_storage_and_notify
+    check_storage_and_notify,
 )
 from .src.utils import send_report_message
 from .src.backup import perform_group_file_backup
 from .src.duplicate_check import detect_duplicates
 from .src.session_manager import SessionManager
-from .src.sync_service import perform_group_file_sync, format_sync_report
+from .src.sync_service import perform_group_file_sync, format_sync_report, sync_command_handler
 
 
 class GroupFSPlugin(Star):
@@ -43,6 +43,7 @@ class GroupFSPlugin(Star):
         self.cron_configs = []
         self.bot = None
         self._is_llbot = False
+        self._rename_folder_available = False
         self.scheduler: Optional[AsyncIOScheduler] = None
 
         self.active_tasks = []
@@ -268,7 +269,7 @@ class GroupFSPlugin(Star):
             return False
         self.bot = bot_client
         await self._detect_llbot_backend()
-        logger.info("[GroupFS] 已绑定 AIOCQHTTP OneBot 客户端")
+        logger.debug("[GroupFS] 已绑定 AIOCQHTTP OneBot 客户端")
         return True
 
     async def _ensure_event_bot_bound(self, event: AstrMessageEvent):
@@ -289,13 +290,16 @@ class GroupFSPlugin(Star):
             app_name = None
             if isinstance(version_info, dict):
                 app_name = version_info.get("app_name")
-            self._is_llbot = app_name == "LLOneBot"
-            logger.info(
+            self._is_llbot = app_name in ("LLOneBot", "SnowLuma")
+            self._rename_folder_available = app_name in ("LLOneBot", "SnowLuma")
+            backend_tag = "llbot" if self._is_llbot else ("snowluma" if app_name == "SnowLuma" else "napcat")
+            logger.debug(
                 f"[GroupFS] 协议端探测结果: app_name={app_name or 'unknown'}, "
-                f"backend={'llbot' if self._is_llbot else 'napcat'}"
+                f"backend={backend_tag}, rename_folder_api={self._rename_folder_available}"
             )
         except Exception as e:
             self._is_llbot = False
+            self._rename_folder_available = False
             logger.warning(f"[GroupFS] 协议端探测失败，默认按 NapCat 处理: {e}")
 
     async def initialize(self):
@@ -310,12 +314,9 @@ class GroupFSPlugin(Star):
 
         if self.bot:
             if has_check_jobs or has_sync_crons:
-                logger.info("[定时任务] 启动调度器（检查/同步）...")
+                logger.debug("[定时任务] 启动调度器（检查/同步）...")
                 self._start_scheduler()
                 self.scheduler.start()
-            # 无论是否有定时任务，若有同步配置都进行一次启动同步
-            if self.sync_configs:
-                self._schedule_startup_sync()
             return
 
         if has_check_jobs or has_sync_crons or self.sync_configs:
@@ -340,9 +341,6 @@ class GroupFSPlugin(Star):
                 elif not self.scheduler.running:
                     self.scheduler.start()
 
-            if self.sync_configs:
-                self._schedule_startup_sync()
-
             if not self.bot:
                 logger.warning("[定时任务] 尚未获取到 bot 实例，同步/检查任务未启动。")
 
@@ -355,36 +353,6 @@ class GroupFSPlugin(Star):
 
         self.scheduler = AsyncIOScheduler()
         self._register_jobs()
-
-    def _schedule_startup_sync(self):
-        if getattr(self, "_startup_sync_scheduled", False):
-            return
-
-        if not self.sync_configs:
-            return
-
-        if not self.bot:
-            logger.warning("[群文件同步] 未获取到 bot 实例，延迟启动一次性同步。")
-            return
-
-        self._startup_sync_scheduled = True
-        task = asyncio.create_task(self._run_startup_sync())
-        self.active_tasks.append(task)
-
-    async def _run_startup_sync(self):
-        for sync_cfg in self.sync_configs:
-            try:
-                await self._run_group_sync_job(
-                    sync_cfg["source_group_id"],
-                    sync_cfg["target_group_id"],
-                    sync_cfg,
-                    is_startup=True,
-                )
-            except Exception as e:
-                logger.error(
-                    f"[群文件同步] 启动同步任务异常: source={sync_cfg.get('source_group_id')} -> target={sync_cfg.get('target_group_id')}, error={e}",
-                    exc_info=True,
-                )
 
     def _register_jobs(self):
         """根据配置注册定时任务"""
@@ -413,7 +381,7 @@ class GroupFSPlugin(Star):
                     day_of_week=day_of_week,
                     id=job_id
                 )
-                logger.info(f"成功注册检查任务: group_id={group_id}, cron_str='{cron_str}'")
+                logger.debug(f"成功注册检查任务: group_id={group_id}, cron_str='{cron_str}'")
             except Exception as e:
                 logger.error(f"注册检查任务 '{cron_str}' 失败: {e}", exc_info=True)
 
@@ -443,7 +411,7 @@ class GroupFSPlugin(Star):
                     day_of_week=day_of_week,
                     id=job_id
                 )
-                logger.info(f"成功注册同步任务: source={source_group_id}, target={target_group_id}, cron_str='{cron_str}'")
+                logger.debug(f"成功注册同步任务: source={source_group_id}, target={target_group_id}, cron_str='{cron_str}'")
             except Exception as e:
                 logger.error(f"注册同步任务 '{cron_str}' 失败: {e}", exc_info=True)
 
@@ -473,7 +441,7 @@ class GroupFSPlugin(Star):
     async def _apscheduler_sync_task(self, source_group_id: int, target_group_id: int, sync_cfg: Dict):
         await self._run_group_sync_job(source_group_id, target_group_id, sync_cfg)
 
-    async def _run_group_sync_job(self, source_group_id: int, target_group_id: int, sync_cfg: Dict, is_startup: bool = False):
+    async def _run_group_sync_job(self, source_group_id: int, target_group_id: int, sync_cfg: Dict, force_report: bool = False):
         if not self.bot:
             logger.warning(
                 f"[群文件同步] 无法执行同步任务: source={source_group_id}, target={target_group_id}，尚未捕获 bot 实例。"
@@ -490,16 +458,25 @@ class GroupFSPlugin(Star):
         if cfg.get("target_group_id") is None:
             cfg["target_group_id"] = target_group_id
 
+        map_key = f"sync_map_{source_group_id}_{target_group_id}"
+        folder_map = await self.get_kv_data(map_key, {})
+
         logger.info(f"[群文件同步] 开始执行同步任务: source={source_group_id}, target={target_group_id}")
 
-        stats = await perform_group_file_sync(
+        stats, updated_map = await perform_group_file_sync(
             self.bot,
             source_group_id,
             target_group_id,
             cfg,
             self.download_semaphore,
             is_llbot=self._is_llbot,
+            rename_folder_available=self._rename_folder_available,
+            folder_map=folder_map,
         )
+
+        if updated_map is not None:
+            await self.put_kv_data(map_key, updated_map)
+
         report = format_sync_report(stats)
 
         logger.info(
@@ -508,8 +485,9 @@ class GroupFSPlugin(Star):
             f"skipped={stats.get('skipped')}, deleted={stats.get('deleted')}, failed={stats.get('failed')}"
         )
 
-        has_changes = any(int(stats.get(field, 0) > 0) for field in ("uploaded", "renamed", "moved", "updated", "deleted"))
-        if not has_changes and int(stats.get("failed", 0)) <= 0:
+        change_fields = ("uploaded", "renamed", "moved", "updated", "deleted")
+        has_changes = any(int(stats.get(field, 0) > 0) for field in change_fields)
+        if not has_changes and int(stats.get("failed", 0)) <= 0 and not force_report:
             return
 
         await send_report_message(
@@ -517,7 +495,7 @@ class GroupFSPlugin(Star):
             target_group_id,
             report,
             threshold=100,
-            node_name="群文件同步启动" if is_startup else "群文件同步",
+            node_name="群文件同步",
         )
 
     async def _perform_scheduled_check(self, group_id: int, auto_delete: bool):
@@ -757,14 +735,14 @@ class GroupFSPlugin(Star):
         
         reply_text += "\n" + "-" * 20
         if page < total_pages:
-            reply_text += f"\n输入 /sf 下一页 查看下一页"
+            reply_text += "\n输入 /sf 下一页 查看下一页"
         if page > 1:
-            reply_text += f"\n输入 /sf 上一页 查看上一页"
+            reply_text += "\n输入 /sf 上一页 查看上一页"
         if total_pages > 1:
-            reply_text += f"\n输入 /sf 跳转 <页码> 跳转"
-        reply_text += f"\n\n💡 快速操作："
-        reply_text += f"\n• /预览 <序号> - 预览文件"
-        reply_text += f"\n• /删除 <序号> - 删除文件"
+            reply_text += "\n输入 /sf 跳转 <页码> 跳转"
+        reply_text += "\n\n💡 快速操作："
+        reply_text += "\n• /预览 <序号> - 预览文件"
+        reply_text += "\n• /删除 <序号> - 删除文件"
         
         yield event.plain_result(reply_text)
 
@@ -799,8 +777,10 @@ class GroupFSPlugin(Star):
                     await asyncio.sleep(60)
                     for p in paths:
                         try:
-                            if os.path.exists(p): os.remove(p)
-                        except: pass
+                            if os.path.exists(p):
+                                os.remove(p)
+                        except Exception:
+                            pass
                 asyncio.create_task(cleanup_images(image_paths))
                 return
 
@@ -1139,7 +1119,8 @@ class GroupFSPlugin(Star):
                             file_name_in_msg = getattr(reply_seg, "file_name", None) or getattr(reply_seg, "name", None)
                             msg_file_id = getattr(reply_seg, "file_id", None)
                             break
-                if file_name_in_msg: break
+                if file_name_in_msg:
+                    break
             elif isinstance(seg, Comp.File):
                 # 直接消息中的文件
                 file_name_in_msg = getattr(seg, "file_name", None) or getattr(seg, "name", None)
@@ -1327,13 +1308,28 @@ class GroupFSPlugin(Star):
         async for res in self._perform_group_file_backup(event, target_group_id, date_filter_timestamp):
             yield res
 
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    @filter.command("gfs", alias={"同步群文件","群文件同步"})
+    async def on_sync_command(self, event: AstrMessageEvent):
+        """同步指定群聊或当前群聊的群文件"""
+        await self._ensure_event_bot_bound(event)
+        async for res in sync_command_handler(
+            event,
+            self.sync_configs,
+            self._sync_default,
+            self.bot,
+            lambda s, d, c: self._run_group_sync_job(s, d, c, force_report=True),
+            self._is_admin(event),
+        ):
+            yield res
+
     async def terminate(self):
         logger.info("插件 [QQ群文件管家] 正在卸载，取消所有任务...")
 
         if self.scheduler and self.scheduler.running:
             try:
                 self.scheduler.shutdown(wait=False) 
-                logger.info("APScheduler 定时任务调度器已成功停止。")
+                logger.debug("APScheduler 定时任务调度器已成功停止。")
             except Exception as e:
                 logger.error(f"停止 APScheduler 时发生错误: {e}")
 

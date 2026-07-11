@@ -33,7 +33,7 @@ def _is_llbot_action_success(result) -> bool:
 
 async def upload_and_send_file_via_api(event: AstrMessageEvent, bot, file_path: str, file_name: str, is_llbot: bool = False) -> bool:
     """上传并发送文件。"""
-    log_prefix = f"[群文件备份-上传/发送]"
+    log_prefix = "[群文件备份-上传/发送]"
     client = bot or event.bot
     target_id = int(event.get_sender_id())
     group_id_str = event.get_group_id() 
@@ -256,7 +256,7 @@ async def perform_group_file_backup(
                     all_volumes = [new_volume_path]
 
             if not all_volumes:
-                yield event.plain_result(f"❌ 备份压缩成功，但未在目录中找到任何生成的压缩文件！")
+                yield event.plain_result("❌ 备份压缩成功，但未在目录中找到任何生成的压缩文件！")
             else:
                 reply_message = (
                     f"✅ 群文件备份完成！\n"
@@ -278,15 +278,15 @@ async def perform_group_file_backup(
                         break
                         
                 if not all_sent_success:
-                    yield event.plain_result(f"❌ 备份发送中断。")
+                    yield event.plain_result("❌ 备份发送中断。")
                     
         elif downloaded_files_count == 0:
-             yield event.plain_result(f"ℹ️ 备份任务完成。但没有找到符合大小或后缀名限制的任何文件。")
+             yield event.plain_result("ℹ️ 备份任务完成。但没有找到符合大小或后缀名限制的任何文件。")
         else:
-            yield event.plain_result(f"❌ 备份任务失败：压缩文件失败或找不到压缩包。")
+            yield event.plain_result("❌ 备份任务失败：压缩文件失败或找不到压缩包。")
             
     except Exception as e:
         logger.error(f"{log_prefix} 备份任务执行过程中发生未知异常: {e}", exc_info=True)
-        yield event.plain_result(f"❌ 备份任务执行失败，发生内部错误。")
+        yield event.plain_result("❌ 备份任务执行失败，发生内部错误。")
     finally:
         asyncio.create_task(cleanup_backup_temp(backup_root_dir, final_zip_path))
