@@ -1,6 +1,7 @@
 import time
 from typing import List, Dict, Optional
 
+
 class SearchSession:
     def __init__(self, keyword: str, results: List[Dict], page_size: int = 10):
         self.keyword = keyword
@@ -24,12 +25,20 @@ class SearchSession:
         """刷新会话活跃时间。"""
         self.timestamp = time.time()
 
+
 class SessionManager:
     def __init__(self, timeout: int = 300):
         self.sessions: Dict[str, SearchSession] = {}  # key: f"{group_id}_{user_id}"
         self.timeout = timeout
 
-    def create_session(self, group_id: int, user_id: int, keyword: str, results: List[Dict], page_size: int = 10) -> SearchSession:
+    def create_session(
+        self,
+        group_id: int,
+        user_id: int,
+        keyword: str,
+        results: List[Dict],
+        page_size: int = 10,
+    ) -> SearchSession:
         key = f"{group_id}_{user_id}"
         session = SearchSession(keyword, results, page_size)
         self.sessions[key] = session
@@ -54,6 +63,8 @@ class SessionManager:
     def cleanup_expired(self):
         """清理所有过期的会话。"""
         now = time.time()
-        expired_keys = [k for k, s in self.sessions.items() if now - s.timestamp > self.timeout]
+        expired_keys = [
+            k for k, s in self.sessions.items() if now - s.timestamp > self.timeout
+        ]
         for k in expired_keys:
             del self.sessions[k]

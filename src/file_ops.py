@@ -15,7 +15,11 @@ def _normalize_action_payload(result):
 
 
 def _is_ob11_action_success(result) -> bool:
-    return isinstance(result, dict) and result.get("status") == "ok" and result.get("retcode") == 0
+    return (
+        isinstance(result, dict)
+        and result.get("status") == "ok"
+        and result.get("retcode") == 0
+    )
 
 
 def _is_llbot_action_success(result) -> bool:
@@ -46,7 +50,9 @@ async def is_group_file_invalid(
 
     async def _check_once() -> bool:
         try:
-            url_result = await bot.api.call_action("get_group_file_url", group_id=group_id, file_id=file_id)
+            url_result = await bot.api.call_action(
+                "get_group_file_url", group_id=group_id, file_id=file_id
+            )
             payload = _normalize_action_payload(url_result)
             if isinstance(payload, dict) and payload.get("url"):
                 return False
@@ -74,19 +80,49 @@ async def is_group_file_invalid(
     return await _check_once()
 
 
-async def get_all_files_with_path(group_id: int, bot, is_llbot: bool = False) -> List[Dict]:
+async def get_all_files_with_path(
+    group_id: int,
+    bot,
+    is_llbot: bool = False,
+    file_checker_cache: Optional[Dict] = None,
+) -> List[Dict]:
     """递归获取所有文件，并计算其在备份目录中的相对路径。"""
+    if file_checker_cache:
+        result = []
+        for info in file_checker_cache.values():
+            rpath = info.get("relative_path", info.get("file_name", ""))
+            result.append(
+                {
+                    "file_id": info.get("file_id"),
+                    "file_name": info.get("file_name"),
+                    "file_size": info.get("file_size"),
+                    "modify_time": info.get("modify_time"),
+                    "busid": info.get("busid"),
+                    "uploader_name": info.get("uploader_name"),
+                    "parent_folder_id": info.get("parent_folder_id", "/"),
+                    "parent_folder_name": info.get("parent_folder_name", "根目录"),
+                    "relative_path": rpath,
+                }
+            )
+        return result
+
     all_files = []
     folders_to_scan = [(None, "根目录", "")]
     while folders_to_scan:
-        current_folder_id, current_folder_name, current_relative_path = folders_to_scan.pop(0)
+        current_folder_id, current_folder_name, current_relative_path = (
+            folders_to_scan.pop(0)
+        )
 
         try:
             if current_folder_id is None or current_folder_id == "/":
                 if is_llbot:
-                    result = await bot.api.call_action("get_group_root_files", group_id=group_id)
+                    result = await bot.api.call_action(
+                        "get_group_root_files", group_id=group_id
+                    )
                 else:
-                    result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
+                    result = await bot.api.call_action(
+                        "get_group_root_files", group_id=group_id, file_count=2000
+                    )
             else:
                 if is_llbot:
                     result = await bot.api.call_action(
@@ -108,33 +144,48 @@ async def get_all_files_with_path(group_id: int, bot, is_llbot: bool = False) ->
 
             if payload.get("files"):
                 for file_info in payload["files"]:
-                    file_info["relative_path"] = os.path.join(current_relative_path, file_info.get("file_name", ""))
-                    file_info["size"] = file_info.get("size", file_info.get("file_size", 0))
-                    file_info["parent_id"] = current_folder_id or "/"
+                    file_info["relative_path"] = os.path.join(
+                        current_relative_path, file_info.get("file_name", "")
+                    )
+                    file_info["parent_folder_id"] = current_folder_id or "/"
+                    file_info["parent_folder_name"] = current_folder_name
                     all_files.append(file_info)
 
             if payload.get("folders"):
                 for folder in payload["folders"]:
                     if folder_id := folder.get("folder_id"):
-                        new_relative_path = os.path.join(current_relative_path, folder.get("folder_name", ""))
-                        folders_to_scan.append((folder_id, folder.get("folder_name", ""), new_relative_path))
+                        new_relative_path = os.path.join(
+                            current_relative_path, folder.get("folder_name", "")
+                        )
+                        folders_to_scan.append(
+                            (
+                                folder_id,
+                                folder.get("folder_name", ""),
+                                new_relative_path,
+                            )
+                        )
 
         except Exception as e:
-            logger.error(f"[{group_id}-群文件遍历] 递归获取文件夹 '{current_folder_name}' 内容时出错: {e}")
+            logger.error(
+                f"[{group_id}-群文件遍历] 递归获取文件夹 '{current_folder_name}' 内容时出错: {e}"
+            )
             continue
     return all_files
 
 
-async def get_all_files_recursive_core(group_id: int, bot, is_llbot: bool = False) -> List[Dict]:
+async def get_all_files_recursive_core(
+    group_id: int,
+    bot,
+    is_llbot: bool = False,
+    file_checker_cache: Optional[Dict] = None,
+) -> List[Dict]:
     """
     递归获取所有文件，并补充父文件夹名称。
     兼容 /cdf, /cf, /sf, /df 等指令。
     """
-    all_files_with_path = await get_all_files_with_path(group_id, bot, is_llbot=is_llbot)
-    for file_info in all_files_with_path:
-        path_parts = file_info.get("relative_path", "").split(os.path.sep)
-        file_info["parent_folder_name"] = os.path.sep.join(path_parts[:-1]) if len(path_parts) > 1 else "根目录"
-    return all_files_with_path
+    return await get_all_files_with_path(
+        group_id, bot, is_llbot=is_llbot, file_checker_cache=file_checker_cache
+    )
 
 
 async def download_and_save_file(
@@ -156,23 +207,33 @@ async def download_and_save_file(
         try:
             existing_size = os.path.getsize(target_path)
             if existing_size == file_size:
-                logger.info(f"{log_prefix} 文件 '{file_name}' 已存在 ({utils.format_bytes(file_size)})，跳过下载。")
+                logger.info(
+                    f"{log_prefix} 文件 '{file_name}' 已存在 ({utils.format_bytes(file_size)})，跳过下载。"
+                )
                 return True
             else:
-                logger.warning(f"{log_prefix} 文件 '{file_name}' 存在但大小不匹配 ({utils.format_bytes(existing_size)} != {utils.format_bytes(file_size)})，重新下载。")
+                logger.warning(
+                    f"{log_prefix} 文件 '{file_name}' 存在但大小不匹配 ({utils.format_bytes(existing_size)} != {utils.format_bytes(file_size)})，重新下载。"
+                )
                 os.remove(target_path)
         except Exception as e:
-            logger.warning(f"{log_prefix} 检查文件 '{file_name}' 大小失败 ({e})，尝试重新下载。")
+            logger.warning(
+                f"{log_prefix} 检查文件 '{file_name}' 大小失败 ({e})，尝试重新下载。"
+            )
             try:
                 os.remove(target_path)
             except Exception:
                 pass
 
     try:
-        url_result = await bot.api.call_action("get_group_file_url", group_id=group_id, file_id=file_id)
+        url_result = await bot.api.call_action(
+            "get_group_file_url", group_id=group_id, file_id=file_id
+        )
         payload = _normalize_action_payload(url_result)
         if not (payload and payload.get("url")):
-            logger.error(f"{log_prefix} 无法获取文件 '{file_name}' 的下载链接或文件已失效。")
+            logger.error(
+                f"{log_prefix} 无法获取文件 '{file_name}' 的下载链接或文件已失效。"
+            )
             return False
         url = payload["url"]
 
@@ -180,33 +241,51 @@ async def download_and_save_file(
             async with semaphore:
                 async with session.get(url, timeout=60) as resp:
                     if resp.status != 200:
-                        logger.error(f"{log_prefix} 下载文件 '{file_name}' 失败 (HTTP: {resp.status})。")
+                        logger.error(
+                            f"{log_prefix} 下载文件 '{file_name}' 失败 (HTTP: {resp.status})。"
+                        )
                         return False
 
                     with open(target_path, "wb") as f:
                         async for chunk in resp.content.iter_chunked(8192):
                             f.write(chunk)
 
-        logger.debug(f"{log_prefix} 成功下载文件 '{file_name}' ({utils.format_bytes(file_size)}) 到: {target_path}")
+        logger.debug(
+            f"{log_prefix} 成功下载文件 '{file_name}' ({utils.format_bytes(file_size)}) 到: {target_path}"
+        )
         return True
     except ActionFailed as e:
         logger.warning(f"{log_prefix} 下载文件 '{file_name}' 失败 (API错误): {e}")
         return False
     except OSError as e:
-        logger.error(f"{log_prefix} 写入文件 '{file_name}' 时发生 OS 错误: {e}", exc_info=True)
+        logger.error(
+            f"{log_prefix} 写入文件 '{file_name}' 时发生 OS 错误: {e}", exc_info=True
+        )
         return False
     except Exception as e:
-        logger.error(f"{log_prefix} 下载文件 '{file_name}' 时发生未知异常: {e}", exc_info=True)
+        logger.error(
+            f"{log_prefix} 下载文件 '{file_name}' 时发生未知异常: {e}", exc_info=True
+        )
         return False
 
 
-async def create_zip_archive(source_dir: str, target_zip_path: str, password: str) -> bool:
+async def create_zip_archive(
+    source_dir: str, target_zip_path: str, password: str
+) -> bool:
     """使用外部命令行工具 (7za) 压缩整个目录。"""
     VOLUME_SIZE = "512m"
     try:
         dir_to_zip = os.path.basename(source_dir)
         parent_dir = os.path.dirname(source_dir)
-        command = ["7za", "a", "-tzip", target_zip_path, dir_to_zip, "-r", f"-v{VOLUME_SIZE}"]
+        command = [
+            "7za",
+            "a",
+            "-tzip",
+            target_zip_path,
+            dir_to_zip,
+            "-r",
+            f"-v{VOLUME_SIZE}",
+        ]
 
         if password:
             command.append(f"-p{password}")
@@ -223,7 +302,9 @@ async def create_zip_archive(source_dir: str, target_zip_path: str, password: st
 
         if process.returncode != 0:
             error_message = stderr.decode("utf-8", errors="ignore")
-            logger.error(f"[群文件备份-压缩] 打包失败，返回码 {process.returncode}: {error_message}")
+            logger.error(
+                f"[群文件备份-压缩] 打包失败，返回码 {process.returncode}: {error_message}"
+            )
             return False
 
         logger.info(f"[群文件备份-压缩] 打包成功: {target_zip_path}")

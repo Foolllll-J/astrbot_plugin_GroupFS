@@ -14,6 +14,9 @@
 
 一款为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的 QQ 群文件管理插件，专注于群文件的**搜索、预览、清理、备份、同步与容量监控**，帮助管理员高效维护群内各类资源。
 
+> [!TIP]
+> 推荐搭配 [QQ 文件预览](https://github.com/Foolllll-J/astrbot_plugin_file_checker) 使用。本插件会自动检测并复用该插件维护的群文件缓存，大幅减少 API 调用并显著提高响应速度。
+
 ---
 
 ## ✨ 功能特性

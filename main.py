@@ -31,14 +31,20 @@ from .src.utils import send_report_message
 from .src.backup import perform_group_file_backup
 from .src.duplicate_check import detect_duplicates
 from .src.session_manager import SessionManager
-from .src.sync_service import perform_group_file_sync, format_sync_report, sync_command_handler
+from .src.sync_service import (
+    perform_group_file_sync,
+    format_sync_report,
+    sync_command_handler,
+)
 
 
 class GroupFSPlugin(Star):
     def __init__(self, context: Context, config: Optional[Dict] = None):
         super().__init__(context)
         self.config = config if config else {}
-        self.admin_users: List[int] = [int(u) for u in self.config.get("admin_users", [])]
+        self.admin_users: List[int] = [
+            int(u) for u in self.config.get("admin_users", [])
+        ]
         self.storage_limits: Dict[int, Dict] = {}
         self.cron_configs = []
         self.bot = None
@@ -56,10 +62,12 @@ class GroupFSPlugin(Star):
             for item in backup_cfg_list:
                 if not isinstance(item, dict):
                     continue
-                template_key = str(item.get("__template_key") or item.get("template") or "").strip()
+                template_key = str(
+                    item.get("__template_key") or item.get("template") or ""
+                ).strip()
                 if template_key == "sync":
                     sync_cfg_list.append(item)
-            
+
         self._backup_default = {
             "backup_zip_password": "",
             "backup_file_size_limit_mb": 100,
@@ -141,20 +149,26 @@ class GroupFSPlugin(Star):
 
         for item in sync_cfg_list:
             if not isinstance(item, dict):
-                logger.warning(f"[群文件同步] 跳过无效 sync 项: item类型={type(item).__name__}")
+                logger.warning(
+                    f"[群文件同步] 跳过无效 sync 项: item类型={type(item).__name__}"
+                )
                 continue
 
             source_group_id = str(item.get("source_group_id", "")).strip()
             target_group_id = str(item.get("target_group_id", "")).strip()
             if not source_group_id or not target_group_id:
-                logger.error(f"[群文件同步] 该 sync 配置缺少 source_group_id/target_group_id，已跳过。当前项: {item}")
+                logger.error(
+                    f"[群文件同步] 该 sync 配置缺少 source_group_id/target_group_id，已跳过。当前项: {item}"
+                )
                 continue
 
             try:
                 source_group_id_int = int(source_group_id)
                 target_group_id_int = int(target_group_id)
             except (TypeError, ValueError):
-                logger.error(f"[群文件同步] 同步配置群号无效: {source_group_id}->{target_group_id}，已跳过。")
+                logger.error(
+                    f"[群文件同步] 同步配置群号无效: {source_group_id}->{target_group_id}，已跳过。"
+                )
                 continue
 
             sync_cfg = self._sync_default.copy()
@@ -166,9 +180,15 @@ class GroupFSPlugin(Star):
 
             sync_cfg["source_group_id"] = source_group_id_int
             sync_cfg["target_group_id"] = target_group_id_int
-            sync_cfg["purify_rules"] = [
-                rule for rule in sync_cfg.get("purify_rules", []) if isinstance(rule, str)
-            ] if isinstance(sync_cfg.get("purify_rules", []), list) else []
+            sync_cfg["purify_rules"] = (
+                [
+                    rule
+                    for rule in sync_cfg.get("purify_rules", [])
+                    if isinstance(rule, str)
+                ]
+                if isinstance(sync_cfg.get("purify_rules", []), list)
+                else []
+            )
 
             self.sync_configs.append(sync_cfg)
 
@@ -178,7 +198,9 @@ class GroupFSPlugin(Star):
                     if not isinstance(cron_str, str) or not cron_str.strip():
                         continue
                     if not croniter.croniter.is_valid(cron_str):
-                        logger.error(f"[群文件同步] 无效的 cron 表达式: {cron_str}，已跳过。")
+                        logger.error(
+                            f"[群文件同步] 无效的 cron 表达式: {cron_str}，已跳过。"
+                        )
                         continue
                     self.sync_cron_configs.append(
                         {
@@ -189,7 +211,7 @@ class GroupFSPlugin(Star):
                     )
 
         # 搜索会话管理
-        self.search_cache_timeout = 600 # 10分钟
+        self.search_cache_timeout = 600  # 10分钟
         self.search_results_per_page = 20
         self.session_mgr = SessionManager(timeout=self.search_cache_timeout)
 
@@ -199,7 +221,9 @@ class GroupFSPlugin(Star):
             for cfg in self.cron_configs:
                 task_identifier = (cfg.get("group_id"), cfg.get("cron_str"))
                 if task_identifier in seen_tasks:
-                    logger.warning(f"检测到重复的定时任务配置 '{task_identifier}'，已跳过。")
+                    logger.warning(
+                        f"检测到重复的定时任务配置 '{task_identifier}'，已跳过。"
+                    )
                     continue
                 seen_tasks.add(task_identifier)
                 unique_configs.append(cfg)
@@ -209,16 +233,21 @@ class GroupFSPlugin(Star):
             seen_sync_tasks = set()
             unique_sync_configs = []
             for cfg in self.sync_cron_configs:
-                task_identifier = (cfg.get("source_group_id"), cfg.get("target_group_id"), cfg.get("cron_str"))
+                task_identifier = (
+                    cfg.get("source_group_id"),
+                    cfg.get("target_group_id"),
+                    cfg.get("cron_str"),
+                )
                 if task_identifier in seen_sync_tasks:
-                    logger.warning(f"检测到重复的同步定时任务配置 '{task_identifier}'，已跳过。")
+                    logger.warning(
+                        f"检测到重复的同步定时任务配置 '{task_identifier}'，已跳过。"
+                    )
                     continue
                 seen_sync_tasks.add(task_identifier)
                 unique_sync_configs.append(cfg)
             self.sync_cron_configs = unique_sync_configs
 
         logger.info("插件 [群文件系统GroupFS] 已加载。")
-
 
     def _build_group_configs(self, raw_list, defaults: Dict) -> List[Dict]:
         if not isinstance(raw_list, list):
@@ -258,7 +287,9 @@ class GroupFSPlugin(Star):
         return user_id in self.admin_users
 
     def _is_supported_bot_client(self, client) -> bool:
-        return bool(client and hasattr(client, "api") and hasattr(client.api, "call_action"))
+        return bool(
+            client and hasattr(client, "api") and hasattr(client.api, "call_action")
+        )
 
     async def _try_bind_bot_from_platform_manager(self) -> bool:
         platform = self.context.get_platform(filter.PlatformAdapterType.AIOCQHTTP)
@@ -292,7 +323,11 @@ class GroupFSPlugin(Star):
                 app_name = version_info.get("app_name")
             self._is_llbot = app_name in ("LLOneBot", "SnowLuma")
             self._rename_folder_available = app_name in ("LLOneBot", "SnowLuma")
-            backend_tag = "llbot" if self._is_llbot else ("snowluma" if app_name == "SnowLuma" else "napcat")
+            backend_tag = (
+                "llbot"
+                if self._is_llbot
+                else ("snowluma" if app_name == "SnowLuma" else "napcat")
+            )
             logger.debug(
                 f"[GroupFS] 协议端探测结果: app_name={app_name or 'unknown'}, "
                 f"backend={backend_tag}, rename_folder_api={self._rename_folder_available}"
@@ -301,6 +336,20 @@ class GroupFSPlugin(Star):
             self._is_llbot = False
             self._rename_folder_available = False
             logger.warning(f"[GroupFS] 协议端探测失败，默认按 NapCat 处理: {e}")
+
+    async def _get_file_checker_cache(self, group_id: int) -> Optional[Dict[str, dict]]:
+        """尝试从 file_checker 插件获取群文件缓存 flat_index。"""
+        try:
+            meta = self.context.get_registered_star("astrbot_plugin_file_checker")
+            if (
+                meta
+                and meta.star_cls
+                and hasattr(meta.star_cls, "get_cached_file_listing")
+            ):
+                return await meta.star_cls.get_cached_file_listing(group_id, self.bot)
+        except Exception as e:
+            logger.warning(f"[GroupFS] 获取 file_checker 缓存失败: {e}")
+        return None
 
     async def initialize(self):
         # 尝试从 platform_manager 自动获取 bot 实例
@@ -320,7 +369,9 @@ class GroupFSPlugin(Star):
             return
 
         if has_check_jobs or has_sync_crons or self.sync_configs:
-            logger.warning("[初始化] 未能立即获取 bot 实例，将通过延迟流程补获 bot 并启动同步/检查任务。")
+            logger.warning(
+                "[初始化] 未能立即获取 bot 实例，将通过延迟流程补获 bot 并启动同步/检查任务。"
+            )
             asyncio.create_task(self._delayed_start_scheduler())
 
     async def _delayed_start_scheduler(self):
@@ -379,9 +430,11 @@ class GroupFSPlugin(Star):
                     day=day,
                     month=month,
                     day_of_week=day_of_week,
-                    id=job_id
+                    id=job_id,
                 )
-                logger.debug(f"成功注册检查任务: group_id={group_id}, cron_str='{cron_str}'")
+                logger.debug(
+                    f"成功注册检查任务: group_id={group_id}, cron_str='{cron_str}'"
+                )
             except Exception as e:
                 logger.error(f"注册检查任务 '{cron_str}' 失败: {e}", exc_info=True)
 
@@ -409,25 +462,40 @@ class GroupFSPlugin(Star):
                     day=day,
                     month=month,
                     day_of_week=day_of_week,
-                    id=job_id
+                    id=job_id,
                 )
-                logger.debug(f"成功注册同步任务: source={source_group_id}, target={target_group_id}, cron_str='{cron_str}'")
+                logger.debug(
+                    f"成功注册同步任务: source={source_group_id}, target={target_group_id}, cron_str='{cron_str}'"
+                )
             except Exception as e:
                 logger.error(f"注册同步任务 '{cron_str}' 失败: {e}", exc_info=True)
 
     def _find_sync_cfg(self, source_group_id: int, target_group_id: int) -> Dict:
         for cfg in self.sync_configs:
-            if cfg.get("source_group_id") == source_group_id and cfg.get("target_group_id") == target_group_id:
+            if (
+                cfg.get("source_group_id") == source_group_id
+                and cfg.get("target_group_id") == target_group_id
+            ):
                 return cfg
         return self._sync_default.copy()
 
     async def _apscheduler_check_task(self, group_id: int, auto_delete: bool):
         """APScheduler 调用的包装函数，负责消费生成器并发送消息"""
         if not self.bot:
-            logger.warning(f"[{group_id}] [定时任务] 无法执行，因为尚未捕获到 bot 实例。")
+            logger.warning(
+                f"[{group_id}] [定时任务] 无法执行，因为尚未捕获到 bot 实例。"
+            )
             return
 
-        async for msg in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, is_llbot=self._is_llbot):
+        cache = await self._get_file_checker_cache(group_id)
+        async for msg in perform_scheduled_check(
+            group_id,
+            auto_delete,
+            self.bot,
+            self.storage_limits,
+            is_llbot=self._is_llbot,
+            file_checker_cache=cache,
+        ):
             if self.bot:
                 node_name = "定时清理报告" if auto_delete else "定时检查报告"
                 await send_report_message(
@@ -438,10 +506,18 @@ class GroupFSPlugin(Star):
                     node_name=node_name,
                 )
 
-    async def _apscheduler_sync_task(self, source_group_id: int, target_group_id: int, sync_cfg: Dict):
+    async def _apscheduler_sync_task(
+        self, source_group_id: int, target_group_id: int, sync_cfg: Dict
+    ):
         await self._run_group_sync_job(source_group_id, target_group_id, sync_cfg)
 
-    async def _run_group_sync_job(self, source_group_id: int, target_group_id: int, sync_cfg: Dict, force_report: bool = False):
+    async def _run_group_sync_job(
+        self,
+        source_group_id: int,
+        target_group_id: int,
+        sync_cfg: Dict,
+        force_report: bool = False,
+    ):
         if not self.bot:
             logger.warning(
                 f"[群文件同步] 无法执行同步任务: source={source_group_id}, target={target_group_id}，尚未捕获 bot 实例。"
@@ -461,8 +537,12 @@ class GroupFSPlugin(Star):
         map_key = f"sync_map_{source_group_id}_{target_group_id}"
         folder_map = await self.get_kv_data(map_key, {})
 
-        logger.info(f"[群文件同步] 开始执行同步任务: source={source_group_id}, target={target_group_id}")
+        logger.info(
+            f"[群文件同步] 开始执行同步任务: source={source_group_id}, target={target_group_id}"
+        )
 
+        source_cache = await self._get_file_checker_cache(source_group_id)
+        target_cache = await self._get_file_checker_cache(target_group_id)
         stats, updated_map = await perform_group_file_sync(
             self.bot,
             source_group_id,
@@ -472,6 +552,8 @@ class GroupFSPlugin(Star):
             is_llbot=self._is_llbot,
             rename_folder_available=self._rename_folder_available,
             folder_map=folder_map,
+            source_cache=source_cache,
+            target_cache=target_cache,
         )
 
         if updated_map is not None:
@@ -499,27 +581,59 @@ class GroupFSPlugin(Star):
         )
 
     async def _perform_scheduled_check(self, group_id: int, auto_delete: bool):
-        async for res in perform_scheduled_check(group_id, auto_delete, self.bot, self.storage_limits, is_llbot=self._is_llbot):
+        cache = await self._get_file_checker_cache(group_id)
+        async for res in perform_scheduled_check(
+            group_id,
+            auto_delete,
+            self.bot,
+            self.storage_limits,
+            is_llbot=self._is_llbot,
+            file_checker_cache=cache,
+        ):
             yield res
 
-
     async def _get_all_files_with_path(self, group_id: int, bot) -> List[Dict]:
-        return await get_all_files_with_path(group_id, bot, is_llbot=self._is_llbot)
-    
+        cache = await self._get_file_checker_cache(group_id)
+        return await get_all_files_with_path(
+            group_id, bot, is_llbot=self._is_llbot, file_checker_cache=cache
+        )
+
     async def _get_all_files_recursive_core(self, group_id: int, bot) -> List[Dict]:
         """
         兼容 /cdf, /cf, /sf, /df 等指令。
         """
-        return await get_all_files_recursive_core(group_id, bot, is_llbot=self._is_llbot)
-    
-    async def _download_and_save_file(self, group_id: int, file_id: str, file_name: str, file_size: int, relative_path: str, root_dir: str, client) -> bool:
-        return await download_and_save_file(group_id, file_id, file_name, file_size, relative_path, root_dir, client, self.download_semaphore, is_llbot=self._is_llbot)
+        cache = await self._get_file_checker_cache(group_id)
+        return await get_all_files_recursive_core(
+            group_id, bot, is_llbot=self._is_llbot, file_checker_cache=cache
+        )
+
+    async def _download_and_save_file(
+        self,
+        group_id: int,
+        file_id: str,
+        file_name: str,
+        file_size: int,
+        relative_path: str,
+        root_dir: str,
+        client,
+    ) -> bool:
+        return await download_and_save_file(
+            group_id,
+            file_id,
+            file_name,
+            file_size,
+            relative_path,
+            root_dir,
+            client,
+            self.download_semaphore,
+            is_llbot=self._is_llbot,
+        )
 
     async def _cleanup_backup_temp(self, backup_dir: str, zip_path: Optional[str]):
         await cleanup_backup_temp(backup_dir, zip_path)
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    @filter.command("cdf", alias={"清理失效文件","清理失效群文件"})
+    @filter.command("cdf", alias={"清理失效文件", "清理失效群文件"})
     async def on_check_and_delete_command(self, event: AstrMessageEvent):
         """扫描并自动删除所有失效文件"""
         await self._ensure_event_bot_bound(event)
@@ -533,8 +647,13 @@ class GroupFSPlugin(Star):
         if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
-        yield event.plain_result("⚠️ 警告：即将开始扫描并自动删除所有失效文件！\n此过程可能需要几分钟，请耐心等待，完成后将发送报告。")
-        async for res in perform_batch_check_and_delete(event, is_llbot=self._is_llbot):
+        yield event.plain_result(
+            "⚠️ 警告：即将开始扫描并自动删除所有失效文件！\n此过程可能需要几分钟，请耐心等待，完成后将发送报告。"
+        )
+        cache = await self._get_file_checker_cache(group_id)
+        async for res in perform_batch_check_and_delete(
+            event, is_llbot=self._is_llbot, file_checker_cache=cache
+        ):
             yield res
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -552,7 +671,9 @@ class GroupFSPlugin(Star):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
         logger.info(f"[{group_id}] 用户 {user_id} 触发 /cf 失效文件检查指令。")
-        yield event.plain_result("已开始扫描群内所有文件，查找失效文件...\n这可能需要几分钟，请耐心等待。")
+        yield event.plain_result(
+            "已开始扫描群内所有文件，查找失效文件...\n这可能需要几分钟，请耐心等待。"
+        )
         has_report = False
         async for res in self._perform_scheduled_check(group_id, False):
             has_report = True
@@ -562,34 +683,44 @@ class GroupFSPlugin(Star):
                 yield res
         if not has_report:
             yield event.plain_result("✅ 检查完成，未发现失效文件。")
-    
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE, priority=10)
     async def on_group_file_upload(self, event: AstrMessageEvent):
         """监控群文件上传事件"""
         await self._ensure_event_bot_bound(event)
-        file_component = next((seg for seg in event.get_messages() if isinstance(seg, Comp.File)), None)
+        file_component = next(
+            (seg for seg in event.get_messages() if isinstance(seg, Comp.File)), None
+        )
         if file_component:
             group_id = int(event.get_group_id())
-            
+
             # 仅在配置了容量检查的群组中触发
             if group_id not in self.storage_limits:
                 return
 
-            file_name = getattr(file_component, 'file_name', None) or getattr(file_component, 'name', None)
-            
-            logger.info(f"[{group_id}] 检测到文件上传事件: {file_name}，将触发容量检查。")
+            file_name = getattr(file_component, "file_name", None) or getattr(
+                file_component, "name", None
+            )
+
+            logger.info(
+                f"[{group_id}] 检测到文件上传事件: {file_name}，将触发容量检查。"
+            )
             await asyncio.sleep(1)
             async for res in self._check_storage_and_notify(event):
                 yield res
 
     async def _check_storage_and_notify(self, event: AstrMessageEvent):
-        async for res in check_storage_and_notify(event, self.storage_limits, is_llbot=self._is_llbot):
+        async for res in check_storage_and_notify(
+            event, self.storage_limits, is_llbot=self._is_llbot
+        ):
             yield res
-    
-    def _format_search_results(self, files: List[Dict], search_term: str, for_delete: bool = False) -> str:
+
+    def _format_search_results(
+        self, files: List[Dict], search_term: str, for_delete: bool = False
+    ) -> str:
         return utils.format_search_results(files, search_term, for_delete)
-    
+
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     @filter.command("sf", alias={"搜索"})
     async def on_search_file_command(self, event: AstrMessageEvent):
@@ -602,36 +733,44 @@ class GroupFSPlugin(Star):
         group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
-        
+
         if len(command_parts) < 2:
-            yield event.plain_result("❓ 请提供要搜索的文件名。用法: /搜索 <文件名> [序号]")
+            yield event.plain_result(
+                "❓ 请提供要搜索的文件名。用法: /搜索 <文件名> [序号]"
+            )
             return
-            
+
         action = command_parts[1].lower()
         session = self.session_mgr.get_session(group_id, user_id)
 
         # 检查是否是翻页指令
-        if action in ['n', 'next', '下一页']:
+        if action in ["n", "next", "下一页"]:
             if session:
-                async for res in self._show_search_page(event, session, session.current_page + 1):
+                async for res in self._show_search_page(
+                    event, session, session.current_page + 1
+                ):
                     yield res
                 return
             else:
                 yield event.plain_result("❌ 请先执行搜索。")
                 return
-        elif action in ['p', 'prev', '上一页']:
+        elif action in ["p", "prev", "上一页"]:
             if session:
-                async for res in self._show_search_page(event, session, max(1, session.current_page - 1)):
+                async for res in self._show_search_page(
+                    event, session, max(1, session.current_page - 1)
+                ):
                     yield res
                 return
             else:
                 yield event.plain_result("❌ 请先执行搜索。")
                 return
-        elif action in ['page', '跳转'] and len(command_parts) > 2:
+        elif action in ["page", "跳转"] and len(command_parts) > 2:
             if session:
                 try:
                     target_page = int(command_parts[2])
-                    async for res in self._show_search_page(event, session, target_page):
+                    async for res in self._show_search_page(
+                        event, session, target_page
+                    ):
                         yield res
                     return
                 except ValueError:
@@ -640,9 +779,9 @@ class GroupFSPlugin(Star):
                 yield event.plain_result("❌ 请先执行搜索。")
                 return
         elif action.isdigit() and not session:
-             # 如果用户直接输入 /sf 1 但没有会话，提示搜索
-             yield event.plain_result("❌ 请先输入文件名进行搜索。")
-             return
+            # 如果用户直接输入 /sf 1 但没有会话，提示搜索
+            yield event.plain_result("❌ 请先输入文件名进行搜索。")
+            return
         elif action.isdigit() and session:
             # 如果输入的是数字且有会话，执行跳转页面
             async for res in self._show_search_page(event, session, int(action)):
@@ -651,9 +790,11 @@ class GroupFSPlugin(Star):
 
         filename_to_find = command_parts[1]
         index_str = command_parts[2] if len(command_parts) > 2 else None
-        
-        logger.info(f"[{group_id}] 用户 {user_id} 触发 /sf, 目标: '{filename_to_find}', 序号: {index_str}")
-        
+
+        logger.info(
+            f"[{group_id}] 用户 {user_id} 触发 /sf, 目标: '{filename_to_find}', 序号: {index_str}"
+        )
+
         # 检查是否有现有会话且关键词匹配
         session = self.session_mgr.get_session(group_id, user_id)
         if session and session.keyword == filename_to_find and index_str:
@@ -672,20 +813,30 @@ class GroupFSPlugin(Star):
         all_files = await self._get_all_files_recursive_core(group_id, event.bot)
         found_files = []
         for file_info in all_files:
-            current_filename = file_info.get('file_name', '')
+            current_filename = file_info.get("file_name", "")
             base_name, _ = os.path.splitext(current_filename)
             if filename_to_find in base_name or filename_to_find in current_filename:
                 found_files.append(file_info)
-        
-        logger.info(f"[{group_id}] 在 {len(all_files)} 个文件中，找到 {len(found_files)} 个匹配项。")
+
+        logger.info(
+            f"[{group_id}] 在 {len(all_files)} 个文件中，找到 {len(found_files)} 个匹配项。"
+        )
 
         if not found_files:
-            yield event.plain_result(f"❌ 未在群文件中找到与「{filename_to_find}」相关的任何文件。")
+            yield event.plain_result(
+                f"❌ 未在群文件中找到与「{filename_to_find}」相关的任何文件。"
+            )
             return
-            
+
         # 创建新会话
-        session = self.session_mgr.create_session(group_id, user_id, filename_to_find, found_files, self.search_results_per_page)
-        
+        session = self.session_mgr.create_session(
+            group_id,
+            user_id,
+            filename_to_find,
+            found_files,
+            self.search_results_per_page,
+        )
+
         if index_str:
             try:
                 index = int(index_str)
@@ -695,12 +846,14 @@ class GroupFSPlugin(Star):
                         yield res
                     return
                 else:
-                    yield event.plain_result(f"❌ 序号错误！找到了 {len(found_files)} 个文件，请输入 1 到 {len(found_files)} 之间的数字。")
+                    yield event.plain_result(
+                        f"❌ 序号错误！找到了 {len(found_files)} 个文件，请输入 1 到 {len(found_files)} 之间的数字。"
+                    )
                     return
             except ValueError:
                 yield event.plain_result("❌ 序号必须是一个数字。")
                 return
-        
+
         # 显示第一页
         async for res in self._show_search_page(event, session, 1):
             yield res
@@ -710,29 +863,31 @@ class GroupFSPlugin(Star):
         if page > total_pages:
             yield event.plain_result("⚠️ 已经是最后一页了。")
             return
-        
+
         session.current_page = page
         results = session.get_page_results(page)
-        
+
         page_hint = f" (第 {page}/{total_pages} 页)" if total_pages > 1 else ""
         reply_text = f"🔍 找到了 {session.total_count} 个与「{session.keyword}」相关的结果{page_hint}：\n"
         reply_text += "-" * 20
-        
+
         start_idx = (page - 1) * session.page_size + 1
         for i, file_info in enumerate(results, start_idx):
-            file_name = file_info.get('file_name', '未知文件')
+            file_name = file_info.get("file_name", "未知文件")
             emoji = utils.get_file_emoji(file_name)
-            parent_folder = file_info.get('parent_folder_name', '根目录')
-            path_display = f"\n  路径: /{parent_folder}" if parent_folder != '根目录' else ""
-            
+            parent_folder = file_info.get("parent_folder_name", "根目录")
+            path_display = (
+                f"\n  路径: /{parent_folder}" if parent_folder != "根目录" else ""
+            )
+
             reply_text += (
                 f"\n[{i}] {emoji} {file_name}"
                 f"{path_display}"
                 f"\n  上传者: {file_info.get('uploader_name', '未知')}"
-                f"\n  大小: {utils.format_bytes(file_info.get('size'))}"
+                f"\n  大小: {utils.format_bytes(file_info.get('file_size'))}"
                 f"\n  修改时间: {utils.format_timestamp(file_info.get('modify_time'))}"
             )
-        
+
         reply_text += "\n" + "-" * 20
         if page < total_pages:
             reply_text += "\n输入 /sf 下一页 查看下一页"
@@ -743,35 +898,49 @@ class GroupFSPlugin(Star):
         reply_text += "\n\n💡 快速操作："
         reply_text += "\n• /预览 <序号> - 预览文件"
         reply_text += "\n• /删除 <序号> - 删除文件"
-        
+
         yield event.plain_result(reply_text)
 
-    async def _handle_preview(self, event: AstrMessageEvent, file_to_preview: dict, inner_path: str = None):
+    async def _handle_preview(
+        self, event: AstrMessageEvent, file_to_preview: dict, inner_path: str = None
+    ):
         group_id = int(event.get_group_id())
         try:
-            preview_res, error_msg = await self._get_file_preview(event, file_to_preview, inner_path)
+            preview_res, error_msg = await self._get_file_preview(
+                event, file_to_preview, inner_path
+            )
             if error_msg:
                 yield event.plain_result(error_msg)
                 return
-            
+
             title = f"📄 预览: {file_to_preview.get('file_name')}"
             if inner_path:
                 title += f" ({inner_path})"
-            
+
             if isinstance(preview_res, list):
                 # PDF 预览，发送合并消息
                 image_paths = preview_res
                 sender_id = event.get_self_id()
                 nodes = []
-                
+
                 # 第一条消息是标题
-                nodes.append(Comp.Node(uin=sender_id, name="PDF 预览", content=[Comp.Plain(f"{title}")]))
-                
+                nodes.append(
+                    Comp.Node(
+                        uin=sender_id, name="PDF 预览", content=[Comp.Plain(f"{title}")]
+                    )
+                )
+
                 for img_path in image_paths:
-                    nodes.append(Comp.Node(uin=sender_id, name="PDF 预览", content=[Comp.Image.fromFileSystem(img_path)]))
-                
+                    nodes.append(
+                        Comp.Node(
+                            uin=sender_id,
+                            name="PDF 预览",
+                            content=[Comp.Image.fromFileSystem(img_path)],
+                        )
+                    )
+
                 yield event.chain_result([Comp.Nodes(nodes=nodes)])
-                
+
                 # 延迟清理图片
                 async def cleanup_images(paths):
                     await asyncio.sleep(60)
@@ -781,14 +950,11 @@ class GroupFSPlugin(Star):
                                 os.remove(p)
                         except Exception:
                             pass
+
                 asyncio.create_task(cleanup_images(image_paths))
                 return
 
-            reply_text = (
-                f"{title}\n"
-                + "-" * 20 + "\n"
-                + preview_res
-            )
+            reply_text = f"{title}\n" + "-" * 20 + "\n" + preview_res
             yield event.plain_result(reply_text)
         except Exception as e:
             logger.error(f"[{group_id}] 处理预览时发生未知异常: {e}", exc_info=True)
@@ -806,7 +972,7 @@ class GroupFSPlugin(Star):
         group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
-        
+
         # 检查是否引用了文件
         quoted_file = await self._resolve_file_from_message(event)
 
@@ -816,13 +982,15 @@ class GroupFSPlugin(Star):
                 async for res in self._handle_preview(event, quoted_file):
                     yield res
                 return
-            yield event.plain_result("❓ 用法: /预览 <序号> [内部序号] 或 /预览 <文件名> [序号] [内部序号] 或 引用文件消息后输入 /预览")
+            yield event.plain_result(
+                "❓ 用法: /预览 <序号> [内部序号] 或 /预览 <文件名> [序号] [内部序号] 或 引用文件消息后输入 /预览"
+            )
             return
-            
+
         arg1 = command_parts[1]
         arg2 = command_parts[2] if len(command_parts) > 2 else None
         session = self.session_mgr.get_session(group_id, user_id)
-        
+
         # 场景 0: 引用预览且带内部路径/序号：引用文件后输入 /预览 1
         if quoted_file and arg1:
             # 如果 arg1 是数字且不是文件名，尝试作为内部路径预览
@@ -839,23 +1007,29 @@ class GroupFSPlugin(Star):
             if 1 <= index <= session.total_count:
                 file_to_preview = session.results[index - 1]
                 inner_path = arg2
-                async for res in self._handle_preview(event, file_to_preview, inner_path):
+                async for res in self._handle_preview(
+                    event, file_to_preview, inner_path
+                ):
                     yield res
             else:
-                yield event.plain_result(f"❌ 序号错误！有效范围: 1-{session.total_count}")
+                yield event.plain_result(
+                    f"❌ 序号错误！有效范围: 1-{session.total_count}"
+                )
             return
-            
+
         # 场景 2: /preview <文件名> [序号] [内部路径]
         filename_to_find = arg1
-        
+
         # 搜索文件
         all_files = await self._get_all_files_recursive_core(group_id, event.bot)
-        found_files = [f for f in all_files if filename_to_find in f.get('file_name', '')]
-        
+        found_files = [
+            f for f in all_files if filename_to_find in f.get("file_name", "")
+        ]
+
         if not found_files:
             yield event.plain_result(f"❌ 未找到文件「{filename_to_find}」。")
             return
-            
+
         file_to_preview = None
         inner_path = None
 
@@ -863,10 +1037,12 @@ class GroupFSPlugin(Star):
             # /preview <文件名> <序号> [内部路径]
             idx = int(arg2)
             if 1 <= idx <= len(found_files):
-                file_to_preview = found_files[idx-1]
+                file_to_preview = found_files[idx - 1]
                 inner_path = command_parts[3] if len(command_parts) > 3 else None
             else:
-                yield event.plain_result(f"❌ 序号错误！共找到 {len(found_files)} 个匹配文件。")
+                yield event.plain_result(
+                    f"❌ 序号错误！共找到 {len(found_files)} 个匹配文件。"
+                )
                 return
         else:
             # /preview <文件名> [内部路径]
@@ -875,7 +1051,9 @@ class GroupFSPlugin(Star):
                 inner_path = arg2
             else:
                 # 多个结果，更新会话并显示
-                session = self.session_mgr.create_session(group_id, user_id, filename_to_find, found_files, 20)
+                session = self.session_mgr.create_session(
+                    group_id, user_id, filename_to_find, found_files, 20
+                )
                 async for res in self._show_search_page(event, session, 1):
                     yield res
                 return
@@ -896,46 +1074,52 @@ class GroupFSPlugin(Star):
         group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
-        
+
         if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
             return
 
         # 检查是否引用了文件
         quoted_file = await self._resolve_file_from_message(event)
-        
+
         if len(command_parts) < 2:
             if quoted_file:
                 async for res in self._perform_single_delete(event, quoted_file):
                     yield res
                 return
-            yield event.plain_result("❓ 用法: /删除 <序号> 或 /删除 <1,2,3> 或 /删除 <文件名> [序号/0/1,2,3] 或 引用文件消息后输入 /删除")
+            yield event.plain_result(
+                "❓ 用法: /删除 <序号> 或 /删除 <1,2,3> 或 /删除 <文件名> [序号/0/1,2,3] 或 引用文件消息后输入 /删除"
+            )
             return
-            
+
         target = command_parts[1]
         session = self.session_mgr.get_session(group_id, user_id)
-        
+
         # 场景 1: /删除 <序号> 或 /删除 <1,2,3>
-        if target.isdigit() or ',' in target:
+        if target.isdigit() or "," in target:
             if not session:
                 yield event.plain_result("❌ 请先执行 /搜索 搜索文件。")
                 return
-            
+
             # 处理多选删除 /df 1,2,3
-            if ',' in target:
+            if "," in target:
                 try:
-                    indices = [int(i.strip()) for i in target.split(',') if i.strip().isdigit()]
+                    indices = [
+                        int(i.strip()) for i in target.split(",") if i.strip().isdigit()
+                    ]
                     files_to_delete = []
                     for idx in indices:
                         if 1 <= idx <= session.total_count:
-                            files_to_delete.append(session.results[idx-1])
+                            files_to_delete.append(session.results[idx - 1])
                     if files_to_delete:
-                        async for res in self._perform_batch_delete(event, files_to_delete):
+                        async for res in self._perform_batch_delete(
+                            event, files_to_delete
+                        ):
                             yield res
                         return
                 except ValueError:
                     pass
-            
+
             # 处理单选或全选
             index = int(target) if target.isdigit() else -1
             if index == 0:
@@ -945,23 +1129,29 @@ class GroupFSPlugin(Star):
                 return
             if 1 <= index <= session.total_count:
                 file_to_delete = session.results[index - 1]
-                async for res in self._perform_single_delete(event, file_to_delete, session):
+                async for res in self._perform_single_delete(
+                    event, file_to_delete, session
+                ):
                     yield res
             elif index != -1:
-                yield event.plain_result(f"❌ 序号错误！有效范围: 1-{session.total_count}")
+                yield event.plain_result(
+                    f"❌ 序号错误！有效范围: 1-{session.total_count}"
+                )
             return
-            
+
         # 场景 2: /df <文件名> [序号/0/批量序号]
         filename_to_find = target
         index_str = command_parts[2] if len(command_parts) > 2 else None
-        
+
         # 优先使用会话缓存
         found_files = []
         if session and session.keyword == filename_to_find:
             found_files = session.results
         else:
             all_files = await self._get_all_files_recursive_core(group_id, event.bot)
-            found_files = [f for f in all_files if filename_to_find in f.get('file_name', '')]
+            found_files = [
+                f for f in all_files if filename_to_find in f.get("file_name", "")
+            ]
 
         if not found_files:
             yield event.plain_result(f"❌ 未找到文件「{filename_to_find}」。")
@@ -969,37 +1159,55 @@ class GroupFSPlugin(Star):
 
         # 批量删除 (/df <文件名> 0) 或 (/df <文件名> 1,2,3)
         if index_str:
-            if index_str == '0':
+            if index_str == "0":
                 async for res in self._perform_batch_delete(event, found_files):
                     yield res
                 return
-            elif ',' in index_str:
+            elif "," in index_str:
                 try:
-                    indices = [int(i.strip()) for i in index_str.split(',') if i.strip().isdigit()]
+                    indices = [
+                        int(i.strip())
+                        for i in index_str.split(",")
+                        if i.strip().isdigit()
+                    ]
                     files_to_delete = []
                     for idx in indices:
                         if 1 <= idx <= len(found_files):
-                            files_to_delete.append(found_files[idx-1])
+                            files_to_delete.append(found_files[idx - 1])
                     if files_to_delete:
-                        async for res in self._perform_batch_delete(event, files_to_delete):
+                        async for res in self._perform_batch_delete(
+                            event, files_to_delete
+                        ):
                             yield res
                         return
                 except ValueError:
                     pass
 
         if len(found_files) == 1 and not index_str:
-            async for res in self._perform_single_delete(event, found_files[0], session):
+            async for res in self._perform_single_delete(
+                event, found_files[0], session
+            ):
                 yield res
         elif index_str and index_str.isdigit():
             idx = int(index_str)
             if 1 <= idx <= len(found_files):
-                async for res in self._perform_single_delete(event, found_files[idx-1], session):
+                async for res in self._perform_single_delete(
+                    event, found_files[idx - 1], session
+                ):
                     yield res
             else:
-                yield event.plain_result(f"❌ 序号错误！共找到 {len(found_files)} 个文件。")
+                yield event.plain_result(
+                    f"❌ 序号错误！共找到 {len(found_files)} 个文件。"
+                )
         else:
             # 多个结果，更新会话并显示
-            session = self.session_mgr.create_session(group_id, user_id, filename_to_find, found_files, self.search_results_per_page)
+            session = self.session_mgr.create_session(
+                group_id,
+                user_id,
+                filename_to_find,
+                found_files,
+                self.search_results_per_page,
+            )
             async for res in self._show_search_page(event, session, 1):
                 yield res
 
@@ -1015,7 +1223,7 @@ class GroupFSPlugin(Star):
         group_id = int(group_id_str)
         user_id = int(event.get_sender_id())
         command_parts = event.message_str.split()
-        
+
         # 权限校验
         if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行此操作的权限。")
@@ -1034,16 +1242,20 @@ class GroupFSPlugin(Star):
                 return
             file_to_rename = quoted_file
             new_name = command_parts[1]
-            logger.info(f"[/rn] 使用引用文件: {file_to_rename['file_name']} -> {new_name}")
+            logger.info(
+                f"[/rn] 使用引用文件: {file_to_rename['file_name']} -> {new_name}"
+            )
         else:
             if len(command_parts) < 3:
-                yield event.plain_result("❓ 用法: /rn <序号> <新文件名> 或 /rn <旧文件名> <新文件名>")
+                yield event.plain_result(
+                    "❓ 用法: /rn <序号> <新文件名> 或 /rn <旧文件名> <新文件名>"
+                )
                 return
-            
+
             target = command_parts[1]
             new_name = command_parts[2]
             session = self.session_mgr.get_session(group_id, user_id)
-            
+
             # 场景 1: /重命名 <序号> <新名称>
             if target.isdigit():
                 if not session:
@@ -1053,186 +1265,228 @@ class GroupFSPlugin(Star):
                 if 1 <= index <= session.total_count:
                     file_to_rename = session.results[index - 1]
                 else:
-                    yield event.plain_result(f"❌ 序号错误！有效范围: 1-{session.total_count}")
+                    yield event.plain_result(
+                        f"❌ 序号错误！有效范围: 1-{session.total_count}"
+                    )
                     return
             else:
                 # 场景 2: /rn <旧文件名> <新名称>
-                all_files = await self._get_all_files_recursive_core(group_id, event.bot)
-                found_files = [f for f in all_files if target == f.get('file_name', '')]
-                
+                all_files = await self._get_all_files_recursive_core(
+                    group_id, event.bot
+                )
+                found_files = [f for f in all_files if target == f.get("file_name", "")]
+
                 if not found_files:
                     # 模糊匹配
-                    found_files = [f for f in all_files if target in f.get('file_name', '')]
-                
+                    found_files = [
+                        f for f in all_files if target in f.get("file_name", "")
+                    ]
+
                 if not found_files:
                     yield event.plain_result(f"❌ 未找到文件「{target}」。")
                     return
-                
+
                 if len(found_files) == 1:
                     file_to_rename = found_files[0]
                 else:
                     # 多个结果，更新会话并提示
-                    session = self.session_mgr.create_session(group_id, user_id, target, found_files, 20)
+                    session = self.session_mgr.create_session(
+                        group_id, user_id, target, found_files, 20
+                    )
                     async for res in self._show_search_page(event, session, 1):
                         yield res
-                    yield event.plain_result(f"💡 找到多个匹配文件，请使用 /重命名 <序号> {new_name} 来指定。")
+                    yield event.plain_result(
+                        f"💡 找到多个匹配文件，请使用 /重命名 <序号> {new_name} 来指定。"
+                    )
                     return
 
         if file_to_rename:
             old_name = file_to_rename.get("file_name")
             file_id = file_to_rename.get("file_id")
-            parent_id = file_to_rename.get("parent_id", "/") 
-            
+            parent_id = file_to_rename.get("parent_folder_id", "/")
+
             success, message = await rename_group_file(
-                self.bot, 
-                group_id, 
-                file_id, 
-                parent_id, 
+                self.bot,
+                group_id,
+                file_id,
+                parent_id,
                 new_name,
                 is_llbot=self._is_llbot,
             )
-            
+
             if success:
-                yield event.plain_result(f"✅ 文件重命名成功：\n「{old_name}」\n  ➡️ 「{new_name}」")
+                yield event.plain_result(
+                    f"✅ 文件重命名成功：\n「{old_name}」\n  ➡️ 「{new_name}」"
+                )
                 # 更新会话中的缓存
                 if session and file_to_rename in session.results:
                     file_to_rename["file_name"] = new_name
             else:
                 yield event.plain_result(f"❌ 重命名失败：{message}")
 
-    async def _resolve_file_from_message(self, event: AstrMessageEvent) -> Optional[Dict]:
+    async def _resolve_file_from_message(
+        self, event: AstrMessageEvent
+    ) -> Optional[Dict]:
         """
         参考 filechecker 逻辑：从消息（尤其是引用消息）中解析并获取云端真实有效的群文件信息。
         """
         group_id = int(event.get_group_id())
         messages = event.get_messages()
-        
+
         file_name_in_msg = None
         msg_file_id = None
-        
+
         for seg in messages:
             if isinstance(seg, Comp.Reply):
-                reply_chain = getattr(seg, 'chain', None)
+                reply_chain = getattr(seg, "chain", None)
                 if reply_chain and isinstance(reply_chain, list):
                     for reply_seg in reply_chain:
                         if isinstance(reply_seg, Comp.File):
-                            file_name_in_msg = getattr(reply_seg, "file_name", None) or getattr(reply_seg, "name", None)
+                            file_name_in_msg = getattr(
+                                reply_seg, "file_name", None
+                            ) or getattr(reply_seg, "name", None)
                             msg_file_id = getattr(reply_seg, "file_id", None)
                             break
                 if file_name_in_msg:
                     break
             elif isinstance(seg, Comp.File):
                 # 直接消息中的文件
-                file_name_in_msg = getattr(seg, "file_name", None) or getattr(seg, "name", None)
+                file_name_in_msg = getattr(seg, "file_name", None) or getattr(
+                    seg, "name", None
+                )
                 msg_file_id = getattr(seg, "file_id", None)
                 break
-                
+
         if not file_name_in_msg:
             return None
-            
+
         logger.info(f"尝试解析消息中的文件 '{file_name_in_msg}' (ID: {msg_file_id})...")
         all_files = await self._get_all_files_recursive_core(group_id, self.bot)
-        
+
         # 1. 尝试通过 ID 匹配
         if msg_file_id:
-            target = next((f for f in all_files if f.get('file_id') == msg_file_id), None)
+            target = next(
+                (f for f in all_files if f.get("file_id") == msg_file_id), None
+            )
             if target:
                 return target
-                
+
         # 2. 尝试通过文件名全名匹配
-        target = next((f for f in all_files if f.get('file_name') == file_name_in_msg), None)
+        target = next(
+            (f for f in all_files if f.get("file_name") == file_name_in_msg), None
+        )
         if target:
             return target
-            
+
         return None
 
-    async def _perform_single_delete(self, event: AstrMessageEvent, file_info: dict, session=None):
+    async def _perform_single_delete(
+        self, event: AstrMessageEvent, file_info: dict, session=None
+    ):
         group_id = int(event.get_group_id())
         file_name = file_info.get("file_name")
         file_id = file_info.get("file_id")
-        
+
         if not file_id:
             yield event.plain_result(f"❌ 无法获取文件「{file_name}」的ID。")
             return
-            
+
         try:
-            delete_result = await event.bot.api.call_action('delete_group_file', group_id=group_id, file_id=file_id)
+            delete_result = await event.bot.api.call_action(
+                "delete_group_file", group_id=group_id, file_id=file_id
+            )
             is_success = False
             if self._is_llbot:
                 if delete_result is None:
                     is_success = True
-                elif isinstance(delete_result, dict) and delete_result.get("status") != "failed":
+                elif (
+                    isinstance(delete_result, dict)
+                    and delete_result.get("status") != "failed"
+                ):
                     is_success = True
             elif delete_result:
-                trans_result = delete_result.get('transGroupFileResult', {})
-                result_obj = trans_result.get('result', {})
-                if result_obj.get('retCode') == 0:
+                trans_result = delete_result.get("transGroupFileResult", {})
+                result_obj = trans_result.get("result", {})
+                if result_obj.get("retCode") == 0:
                     is_success = True
-            
+
             if is_success:
                 yield event.plain_result(f"✅ 文件「{file_name}」已成功删除。")
                 if session and file_info in session.results:
                     session.results.remove(file_info)
                     session.total_count = len(session.results)
             else:
-                wording = delete_result.get('wording', 'API未返回成功状态')
+                wording = delete_result.get("wording", "API未返回成功状态")
                 yield event.plain_result(f"❌ 删除文件「{file_name}」失败：{wording}")
         except Exception as e:
             logger.error(f"[{group_id}] 删除文件时出错: {e}", exc_info=True)
             yield event.plain_result(f"❌ 删除文件「{file_name}」时发生内部错误。")
 
-    async def _perform_batch_delete(self, event: AstrMessageEvent, files_to_delete: List[Dict]):
-        async for res in perform_batch_delete(event, files_to_delete, is_llbot=self._is_llbot):
+    async def _perform_batch_delete(
+        self, event: AstrMessageEvent, files_to_delete: List[Dict]
+    ):
+        async for res in perform_batch_delete(
+            event, files_to_delete, is_llbot=self._is_llbot
+        ):
             yield res
 
     async def _cleanup_folder(self, path: str):
         await cleanup_folder(path)
 
-    async def _get_file_preview(self, event: AstrMessageEvent, file_info: dict, inner_path: str = None) -> tuple[str, str | None]:
+    async def _get_file_preview(
+        self, event: AstrMessageEvent, file_info: dict, inner_path: str = None
+    ) -> tuple[str, str | None]:
         group_id = int(event.get_group_id())
         preview_cfg = self._get_group_config(
             group_id, self.preview_configs, self._preview_default
         )
         return await get_file_preview(
             group_id,
-            file_info, 
-            event.bot, 
+            file_info,
+            event.bot,
             preview_cfg.get("default_zip_password", ""),
             int(preview_cfg.get("preview_length", 1000)),
             self.download_semaphore,
             self._cleanup_folder,
             inner_path,
-            max(1, int(preview_cfg.get("pdf_preview_pages", 1)))
+            max(1, int(preview_cfg.get("pdf_preview_pages", 1))),
         )
 
-    async def _create_zip_archive(self, source_dir: str, target_zip_path: str, password: str) -> bool:
+    async def _create_zip_archive(
+        self, source_dir: str, target_zip_path: str, password: str
+    ) -> bool:
         return await create_zip_archive(source_dir, target_zip_path, password)
 
-    async def _perform_group_file_backup(self, event: AstrMessageEvent, group_id: int, date_filter_timestamp: Optional[int] = None):
+    async def _perform_group_file_backup(
+        self,
+        event: AstrMessageEvent,
+        group_id: int,
+        date_filter_timestamp: Optional[int] = None,
+    ):
         backup_cfg = self._get_group_config(
             group_id, self.backup_configs, self._backup_default
         )
         ext_str = str(backup_cfg.get("backup_file_extensions", "txt,zip"))
         backup_file_extensions = [
-            ext.strip().lstrip('.').lower()
-            for ext in ext_str.split(',')
-            if ext.strip()
+            ext.strip().lstrip(".").lower() for ext in ext_str.split(",") if ext.strip()
         ]
+        cache = await self._get_file_checker_cache(group_id)
         async for res in perform_group_file_backup(
-            event, 
-            group_id, 
-            self.bot, 
-            self.download_semaphore, 
+            event,
+            group_id,
+            self.bot,
+            self.download_semaphore,
             int(backup_cfg.get("backup_file_size_limit_mb", 100)),
             backup_file_extensions,
             str(backup_cfg.get("backup_zip_password", "")),
             date_filter_timestamp,
             is_llbot=self._is_llbot,
+            file_checker_cache=cache,
         ):
             yield res
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    @filter.command("ddf", alias={"重复文件检测","重复群文件检测","群文件查重"})
+    @filter.command("ddf", alias={"重复文件检测", "重复群文件检测", "群文件查重"})
     async def on_detect_duplicates_command(self, event: AstrMessageEvent):
         """检测群文件中的重复文件（使用LLM分析）"""
         await self._ensure_event_bot_bound(event)
@@ -1240,34 +1494,34 @@ class GroupFSPlugin(Star):
         if not group_id_str:
             yield event.plain_result("❌ 此指令只能在群聊中使用。")
             return
-        
+
         if not self._is_admin(event):
             yield event.plain_result("⚠️ 您没有执行重复文件检测的权限。")
             return
-        
+
         async for result in detect_duplicates(
-            event, 
-            self.bot, 
-            self.context, 
-            self._get_all_files_recursive_core, 
-            self.text_to_image
+            event,
+            self.bot,
+            self.context,
+            self._get_all_files_recursive_core,
+            self.text_to_image,
         ):
             yield result
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    @filter.command("gfb", alias={"备份群文件","群文件备份"})
+    @filter.command("gfb", alias={"备份群文件", "群文件备份"})
     async def on_group_file_backup_command(self, event: AstrMessageEvent):
         """备份指定群聊或当前群聊的群文件"""
         await self._ensure_event_bot_bound(event)
-        
+
         # 1. 解析目标群ID和日期参数
         group_id_str = event.get_group_id()
         user_id = int(event.get_sender_id())
-        
+
         command_parts = event.message_str.split()
         target_group_id: Optional[int] = None
         date_filter_timestamp: Optional[int] = None
-        
+
         # 解析参数: /gfb [群号] [日期]
         if len(command_parts) > 1:
             try:
@@ -1276,7 +1530,9 @@ class GroupFSPlugin(Star):
                 if len(command_parts) > 2:
                     date_filter_timestamp = utils.parse_date_param(command_parts[2])
                     if date_filter_timestamp is None:
-                        yield event.plain_result("❌ 日期格式错误。支持格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD\n示例: /gfb 123456 2024-01-01")
+                        yield event.plain_result(
+                            "❌ 日期格式错误。支持格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD\n示例: /gfb 123456 2024-01-01"
+                        )
                         return
             except ValueError:
                 # 可能第一个参数是日期而不是群号
@@ -1284,20 +1540,28 @@ class GroupFSPlugin(Star):
                     target_group_id = int(group_id_str)
                     date_filter_timestamp = utils.parse_date_param(command_parts[1])
                     if date_filter_timestamp is None:
-                        yield event.plain_result("❌ 格式错误：请提供有效的群号或日期。\n用法: /gfb [群号] [日期]\n日期格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD")
+                        yield event.plain_result(
+                            "❌ 格式错误：请提供有效的群号或日期。\n用法: /gfb [群号] [日期]\n日期格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD"
+                        )
                         return
                 else:
-                    yield event.plain_result("❌ 格式错误：请提供有效的群号。用法: /gfb <群号> [日期]")
+                    yield event.plain_result(
+                        "❌ 格式错误：请提供有效的群号。用法: /gfb <群号> [日期]"
+                    )
                     return
         elif group_id_str:
             # 群聊中且没有参数，备份当前群
             target_group_id = int(group_id_str)
         else:
             # 私聊中且没有参数
-            yield event.plain_result("❌ 格式错误：在私聊中请指定要备份的群号。\n用法: /gfb <群号> [日期]\n日期格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD")
+            yield event.plain_result(
+                "❌ 格式错误：在私聊中请指定要备份的群号。\n用法: /gfb <群号> [日期]\n日期格式: YYYY-MM-DD, YYYYMMDD, YYYY/MM/DD"
+            )
             return
 
-        logger.info(f"用户 {user_id} 触发 /gfb 备份指令，目标群ID: {target_group_id}, 日期筛选: {command_parts[2] if len(command_parts) > 2 else '无'}")
+        logger.info(
+            f"用户 {user_id} 触发 /gfb 备份指令，目标群ID: {target_group_id}, 日期筛选: {command_parts[2] if len(command_parts) > 2 else '无'}"
+        )
 
         # 2. 权限校验
         if not self._is_admin(event):
@@ -1305,11 +1569,13 @@ class GroupFSPlugin(Star):
             return
 
         # 3. 执行备份任务
-        async for res in self._perform_group_file_backup(event, target_group_id, date_filter_timestamp):
+        async for res in self._perform_group_file_backup(
+            event, target_group_id, date_filter_timestamp
+        ):
             yield res
 
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    @filter.command("gfs", alias={"同步群文件","群文件同步"})
+    @filter.command("gfs", alias={"同步群文件", "群文件同步"})
     async def on_sync_command(self, event: AstrMessageEvent):
         """同步指定群聊或当前群聊的群文件"""
         await self._ensure_event_bot_bound(event)
@@ -1328,7 +1594,7 @@ class GroupFSPlugin(Star):
 
         if self.scheduler and self.scheduler.running:
             try:
-                self.scheduler.shutdown(wait=False) 
+                self.scheduler.shutdown(wait=False)
                 logger.debug("APScheduler 定时任务调度器已成功停止。")
             except Exception as e:
                 logger.error(f"停止 APScheduler 时发生错误: {e}")
@@ -1336,10 +1602,10 @@ class GroupFSPlugin(Star):
         for task in self.active_tasks:
             if not task.done():
                 task.cancel()
-        
+
         try:
             await asyncio.gather(*self.active_tasks, return_exceptions=True)
         except asyncio.CancelledError:
             pass
-        
+
         logger.info("插件 [QQ 群文件管家] 已卸载。")

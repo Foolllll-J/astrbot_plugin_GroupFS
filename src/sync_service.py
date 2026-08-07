@@ -27,7 +27,11 @@ def _normalize_action_payload(result):
 
 
 def _is_ob11_action_success(result: Optional[dict]) -> bool:
-    return isinstance(result, dict) and result.get("status") == "ok" and result.get("retcode") == 0
+    return (
+        isinstance(result, dict)
+        and result.get("status") == "ok"
+        and result.get("retcode") == 0
+    )
 
 
 def _is_llbot_action_success(result: Optional[dict]) -> bool:
@@ -66,7 +70,9 @@ def _purify_file_name(file_name: str, rules: Optional[list]) -> str:
         try:
             result = re.sub(pattern, "", result)
         except re.error as e:
-            logger.warning(f"[群文件同步] 无效的文件名净化规则: pattern={pattern}, error={e}")
+            logger.warning(
+                f"[群文件同步] 无效的文件名净化规则: pattern={pattern}, error={e}"
+            )
     return result
 
 
@@ -112,7 +118,6 @@ def _is_upload_success_response(result: Optional[dict]) -> bool:
     return False
 
 
-
 def _is_delete_success_response(result: Optional[dict]) -> bool:
     # NapCat delete_group_file / delete_group_folder 成功响应兼容
     if result is None:
@@ -132,15 +137,17 @@ def _is_delete_success_response(result: Optional[dict]) -> bool:
         return ret_msg in ("", "ok")
 
     # 文件删除返回结构按外层判定：{'result': 0, 'errMsg': 'ok', ...}
-    return result.get("result") == 0 and str(result.get("errMsg", "")).strip().lower() == "ok"
-
-
-
+    return (
+        result.get("result") == 0
+        and str(result.get("errMsg", "")).strip().lower() == "ok"
+    )
 
 
 def _build_filtered_snapshot(items: List[Dict], cfg: Dict) -> List[Dict]:
     extension_str = str(cfg.get("sync_file_extensions", "")).strip().lower()
-    ext_allow = {ext.strip().lstrip(".") for ext in extension_str.split(",") if ext.strip()}
+    ext_allow = {
+        ext.strip().lstrip(".") for ext in extension_str.split(",") if ext.strip()
+    }
 
     size_limit_mb = int(cfg.get("sync_file_size_limit_mb", 0) or 0)
     size_limit_bytes = max(0, size_limit_mb) * 1024 * 1024
@@ -153,7 +160,7 @@ def _build_filtered_snapshot(items: List[Dict], cfg: Dict) -> List[Dict]:
             continue
 
         file_name = item.get("file_name") or ""
-        file_size = int(item.get("size", 0) or 0)
+        file_size = int(item.get("file_size", 0) or 0)
 
         if size_limit_bytes > 0 and file_size > size_limit_bytes:
             continue
@@ -168,19 +175,21 @@ def _build_filtered_snapshot(items: List[Dict], cfg: Dict) -> List[Dict]:
         if not sanitized_name:
             sanitized_name = file_name
 
-        effective_path = sanitized_name if not parent_dir else f"{parent_dir}/{sanitized_name}"
+        effective_path = (
+            sanitized_name if not parent_dir else f"{parent_dir}/{sanitized_name}"
+        )
 
         result.append(
             {
                 "file_id": item.get("file_id", ""),
                 "file_name": file_name,
                 "sanitized_name": sanitized_name,
-                "size": file_size,
+                "file_size": file_size,
                 "modify_time": int(item.get("modify_time", 0) or 0),
                 "relative_path": raw_relative_path,
                 "parent_path": parent_dir,
                 "effective_path": effective_path,
-                "parent_id": item.get("parent_id") or "/",
+                "parent_folder_id": item.get("parent_folder_id") or "/",
             }
         )
 
@@ -202,7 +211,9 @@ def _build_orphan_snapshot(items: List[Dict], cfg: Dict) -> List[Dict]:
         if not sanitized_name:
             sanitized_name = file_name
 
-        effective_path = sanitized_name if not parent_dir else f"{parent_dir}/{sanitized_name}"
+        effective_path = (
+            sanitized_name if not parent_dir else f"{parent_dir}/{sanitized_name}"
+        )
         result.append(
             {
                 "file_id": item.get("file_id", ""),
@@ -214,7 +225,11 @@ def _build_orphan_snapshot(items: List[Dict], cfg: Dict) -> List[Dict]:
     return result
 
 
-def _build_indexes(records: List[Dict]) -> Tuple[Dict[str, List[Dict]], Dict[Tuple[str, int], List[Dict]], Dict[int, List[Dict]]]:
+def _build_indexes(
+    records: List[Dict],
+) -> Tuple[
+    Dict[str, List[Dict]], Dict[Tuple[str, int], List[Dict]], Dict[int, List[Dict]]
+]:
     path_index: Dict[str, List[Dict]] = {}
     parent_size_index: Dict[Tuple[str, int], List[Dict]] = {}
     size_index: Dict[int, List[Dict]] = {}
@@ -224,12 +239,17 @@ def _build_indexes(records: List[Dict]) -> Tuple[Dict[str, List[Dict]], Dict[Tup
             continue
 
         path_index.setdefault(item["effective_path"], []).append(item)
-        parent_size_index.setdefault((item["parent_path"], item["size"]), []).append(item)
-        size_index.setdefault(item["size"], []).append(item)
+        parent_size_index.setdefault(
+            (item["parent_path"], item["file_size"]), []
+        ).append(item)
+        size_index.setdefault(item["file_size"], []).append(item)
 
     for container in (path_index, parent_size_index, size_index):
         for group in container.values():
-            group.sort(key=lambda x: (x.get("modify_time", 0), x.get("sanitized_name", "")), reverse=True)
+            group.sort(
+                key=lambda x: (x.get("modify_time", 0), x.get("sanitized_name", "")),
+                reverse=True,
+            )
 
     return path_index, parent_size_index, size_index
 
@@ -242,13 +262,19 @@ def _pop_unused(items: List[Dict], used_ids: Set[str]) -> Optional[Dict]:
     return None
 
 
-async def _list_group_folders(bot, group_id: int, parent_id: str, is_llbot: bool = False):
+async def _list_group_folders(
+    bot, group_id: int, parent_id: str, is_llbot: bool = False
+):
     try:
         if parent_id in ("", "/", None):
             if is_llbot:
-                result = await bot.api.call_action("get_group_root_files", group_id=group_id)
+                result = await bot.api.call_action(
+                    "get_group_root_files", group_id=group_id
+                )
             else:
-                result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
+                result = await bot.api.call_action(
+                    "get_group_root_files", group_id=group_id, file_count=2000
+                )
         else:
             if is_llbot:
                 result = await bot.api.call_action(
@@ -268,18 +294,25 @@ async def _list_group_folders(bot, group_id: int, parent_id: str, is_llbot: bool
         if isinstance(payload, dict) and payload.get("folders"):
             return payload.get("folders", [])
     except Exception as e:
-        logger.warning(f"[群文件同步] 获取目录失败: group_id={group_id}, parent_id={parent_id}, error={e}")
+        logger.warning(
+            f"[群文件同步] 获取目录失败: group_id={group_id}, parent_id={parent_id}, error={e}"
+        )
     return []
 
 
-
-async def _list_group_files_by_folder(bot, group_id: int, parent_id: str, is_llbot: bool = False):
+async def _list_group_files_by_folder(
+    bot, group_id: int, parent_id: str, is_llbot: bool = False
+):
     try:
         if parent_id in ("", "/", None):
             if is_llbot:
-                result = await bot.api.call_action("get_group_root_files", group_id=group_id)
+                result = await bot.api.call_action(
+                    "get_group_root_files", group_id=group_id
+                )
             else:
-                result = await bot.api.call_action("get_group_root_files", group_id=group_id, file_count=2000)
+                result = await bot.api.call_action(
+                    "get_group_root_files", group_id=group_id, file_count=2000
+                )
         else:
             if is_llbot:
                 result = await bot.api.call_action(
@@ -299,11 +332,19 @@ async def _list_group_files_by_folder(bot, group_id: int, parent_id: str, is_llb
         if isinstance(payload, dict) and payload.get("files"):
             return payload.get("files", [])
     except Exception as e:
-        logger.warning(f"[群文件同步] 获取目录文件失败: group_id={group_id}, parent_id={parent_id}, error={e}")
+        logger.warning(
+            f"[群文件同步] 获取目录文件失败: group_id={group_id}, parent_id={parent_id}, error={e}"
+        )
     return []
 
 
-async def _create_group_folder(bot, group_id: int, folder_name: str, parent_id: Optional[str], is_llbot: bool = False) -> bool:
+async def _create_group_folder(
+    bot,
+    group_id: int,
+    folder_name: str,
+    parent_id: Optional[str],
+    is_llbot: bool = False,
+) -> bool:
     """创建群文件夹。"""
     if not folder_name:
         return False
@@ -350,18 +391,29 @@ async def _create_group_folder(bot, group_id: int, folder_name: str, parent_id: 
         return False
 
 
-async def _collect_group_folders(bot, group_id: int, is_llbot: bool = False) -> List[Dict]:
+async def _collect_group_folders(
+    bot, group_id: int, is_llbot: bool = False
+) -> List[Dict]:
     return await _list_group_folders(bot, group_id, "/", is_llbot=is_llbot)
 
 
-async def _delete_group_folder(bot, group_id: int, folder_id: str, is_llbot: bool = False) -> bool:
+async def _delete_group_folder(
+    bot, group_id: int, folder_id: str, is_llbot: bool = False
+) -> bool:
     try:
         if is_llbot:
-            result = await bot.api.call_action("delete_group_folder", group_id=group_id, folder_id=folder_id)
+            result = await bot.api.call_action(
+                "delete_group_folder", group_id=group_id, folder_id=folder_id
+            )
             if _is_llbot_action_success(result):
                 return True
         else:
-            result = await bot.api.call_action("delete_group_folder", group_id=group_id, folder_id=folder_id, folder=folder_id)
+            result = await bot.api.call_action(
+                "delete_group_folder",
+                group_id=group_id,
+                folder_id=folder_id,
+                folder=folder_id,
+            )
 
         if _is_delete_success_response(result):
             return True
@@ -371,33 +423,48 @@ async def _delete_group_folder(bot, group_id: int, folder_id: str, is_llbot: boo
         )
         return False
     except Exception as e:
-        logger.warning(f"[群文件同步] 删除文件夹失败: group_id={group_id}, folder_id={folder_id}, error={e}")
+        logger.warning(
+            f"[群文件同步] 删除文件夹失败: group_id={group_id}, folder_id={folder_id}, error={e}"
+        )
         return False
 
 
-async def _cleanup_orphan_folders(bot, target_group_id: int, source_folder_names: Set[str], target_folders: List[Dict], is_llbot: bool = False) -> Tuple[int, int]:
+async def _cleanup_orphan_folders(
+    bot,
+    target_group_id: int,
+    source_folder_names: Set[str],
+    target_folders: List[Dict],
+    is_llbot: bool = False,
+) -> Tuple[int, int]:
     if not target_folders:
         return 0, 0
 
     deleted = 0
     failed = 0
 
-    source_folder_names = {name.strip() for name in source_folder_names if isinstance(name, str)}
+    source_folder_names = {
+        name.strip() for name in source_folder_names if isinstance(name, str)
+    }
     orphan_folders = [
         folder
         for folder in target_folders
         if isinstance(folder, dict)
         and folder.get("folder_id")
-        and folder.get("folder_name") and folder.get("folder_name") not in source_folder_names
+        and folder.get("folder_name")
+        and folder.get("folder_name") not in source_folder_names
     ]
 
     for folder in orphan_folders:
         folder_id = folder.get("folder_id")
         folder_name = folder.get("folder_name")
-        if await _list_group_files_by_folder(bot, target_group_id, folder_id, is_llbot=is_llbot):
+        if await _list_group_files_by_folder(
+            bot, target_group_id, folder_id, is_llbot=is_llbot
+        ):
             continue
 
-        if await _delete_group_folder(bot, target_group_id, folder_id, is_llbot=is_llbot):
+        if await _delete_group_folder(
+            bot, target_group_id, folder_id, is_llbot=is_llbot
+        ):
             logger.info(f"[群文件同步] 已清理目标端空目录: {folder_name}")
             deleted += 1
             continue
@@ -430,7 +497,9 @@ async def _resolve_folder_id(
             current_parent_id = cached_id
             continue
 
-        folder_list = await _list_group_folders(bot, group_id, current_parent_id, is_llbot=is_llbot)
+        folder_list = await _list_group_folders(
+            bot, group_id, current_parent_id, is_llbot=is_llbot
+        )
         target_folder_id = None
         for folder in folder_list:
             if folder.get("folder_name") == segment:
@@ -438,18 +507,24 @@ async def _resolve_folder_id(
                 break
 
         if target_folder_id is None:
-            created = await _create_group_folder(bot, group_id, segment, current_parent_id, is_llbot=is_llbot)
+            created = await _create_group_folder(
+                bot, group_id, segment, current_parent_id, is_llbot=is_llbot
+            )
             if not created:
                 return None
 
-            folder_list = await _list_group_folders(bot, group_id, current_parent_id, is_llbot=is_llbot)
+            folder_list = await _list_group_folders(
+                bot, group_id, current_parent_id, is_llbot=is_llbot
+            )
             for folder in folder_list:
                 if folder.get("folder_name") == segment:
                     target_folder_id = folder.get("folder_id")
                     break
 
         if not target_folder_id:
-            logger.error(f"[群文件同步] 无法解析目录ID: group_id={group_id}, path={current_key}")
+            logger.error(
+                f"[群文件同步] 无法解析目录ID: group_id={group_id}, path={current_key}"
+            )
             return None
 
         folder_cache[current_key] = target_folder_id
@@ -458,9 +533,13 @@ async def _resolve_folder_id(
     return current_parent_id
 
 
-async def _delete_group_file(bot, group_id: int, file_id: str, is_llbot: bool = False) -> bool:
+async def _delete_group_file(
+    bot, group_id: int, file_id: str, is_llbot: bool = False
+) -> bool:
     try:
-        result = await bot.api.call_action("delete_group_file", group_id=group_id, file_id=file_id)
+        result = await bot.api.call_action(
+            "delete_group_file", group_id=group_id, file_id=file_id
+        )
         if is_llbot:
             if _is_llbot_action_success(result):
                 return True
@@ -472,11 +551,20 @@ async def _delete_group_file(bot, group_id: int, file_id: str, is_llbot: bool = 
         )
         return False
     except Exception as e:
-        logger.warning(f"[群文件同步] 删除文件失败: group_id={group_id}, file_id={file_id}, error={e}")
+        logger.warning(
+            f"[群文件同步] 删除文件失败: group_id={group_id}, file_id={file_id}, error={e}"
+        )
         return False
 
 
-async def _move_group_file(bot, group_id: int, file_id: str, source_parent: str, target_parent: str, is_llbot: bool = False) -> bool:
+async def _move_group_file(
+    bot,
+    group_id: int,
+    file_id: str,
+    source_parent: str,
+    target_parent: str,
+    is_llbot: bool = False,
+) -> bool:
     try:
         if is_llbot:
             result = await bot.api.call_action(
@@ -511,7 +599,14 @@ async def _move_group_file(bot, group_id: int, file_id: str, source_parent: str,
         return False
 
 
-async def _upload_group_file(bot, group_id: int, local_path: str, file_name: str, folder_id: Optional[str], is_llbot: bool = False) -> bool:
+async def _upload_group_file(
+    bot,
+    group_id: int,
+    local_path: str,
+    file_name: str,
+    folder_id: Optional[str],
+    is_llbot: bool = False,
+) -> bool:
     try:
         if is_llbot:
             result = await bot.api.call_action(
@@ -544,17 +639,28 @@ async def _upload_group_file(bot, group_id: int, local_path: str, file_name: str
         )
         return False
     except ActionFailed as e:
-        logger.warning(f"[群文件同步] 上传文件异常: group_id={group_id}, file_name={file_name}, error={e}")
+        logger.warning(
+            f"[群文件同步] 上传文件异常: group_id={group_id}, file_name={file_name}, error={e}"
+        )
         return False
     except Exception as e:
-        logger.warning(f"[群文件同步] 上传文件失败: group_id={group_id}, file_name={file_name}, error={e}")
+        logger.warning(
+            f"[群文件同步] 上传文件失败: group_id={group_id}, file_name={file_name}, error={e}"
+        )
         return False
 
 
-async def _download_to_temp(bot, source_group_id: int, source_item: Dict, temp_root: str, semaphore: asyncio.Semaphore, is_llbot: bool = False) -> Tuple[bool, Optional[str]]:
+async def _download_to_temp(
+    bot,
+    source_group_id: int,
+    source_item: Dict,
+    temp_root: str,
+    semaphore: asyncio.Semaphore,
+    is_llbot: bool = False,
+) -> Tuple[bool, Optional[str]]:
     file_id = source_item.get("file_id")
     file_name = source_item.get("file_name") or ""
-    file_size = int(source_item.get("size", 0) or 0)
+    file_size = int(source_item.get("file_size", 0) or 0)
     relative_path = source_item.get("relative_path") or ""
 
     local_path = os.path.join(temp_root, relative_path)
@@ -582,7 +688,13 @@ async def _cleanup_temp_path(temp_root: str) -> None:
         logger.warning(f"[群文件同步] 临时目录清理失败: {temp_root}, error={e}")
 
 
-async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict], sample_size: int = 2, is_llbot: bool = False) -> bool:
+async def _validate_source_snapshot(
+    bot,
+    group_id: int,
+    file_records: List[Dict],
+    sample_size: int = 2,
+    is_llbot: bool = False,
+) -> bool:
     if not isinstance(file_records, list) or not file_records:
         return True
 
@@ -601,7 +713,9 @@ async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict]
             continue
 
         try:
-            url_result = await bot.api.call_action("get_group_file_url", group_id=group_id, file_id=file_id)
+            url_result = await bot.api.call_action(
+                "get_group_file_url", group_id=group_id, file_id=file_id
+            )
             payload = _normalize_action_payload(url_result)
             if not (isinstance(payload, dict) and payload.get("url")):
                 logger.warning(
@@ -617,28 +731,39 @@ async def _validate_source_snapshot(bot, group_id: int, file_records: List[Dict]
     return True
 
 
-async def _list_group_files_with_retry(bot, group_id: int, retry: int = 1, is_llbot: bool = False) -> Optional[List[Dict]]:
+async def _list_group_files_with_retry(
+    bot, group_id: int, retry: int = 1, is_llbot: bool = False,
+    file_checker_cache: Optional[Dict] = None,
+) -> Optional[List[Dict]]:
     for idx in range(retry + 1):
         try:
-            return await get_all_files_with_path(group_id, bot, is_llbot=is_llbot)
+            return await get_all_files_with_path(group_id, bot, is_llbot=is_llbot, file_checker_cache=file_checker_cache)
         except ActionFailed as e:
             if idx >= retry:
-                logger.error(f"[群文件同步] 获取群文件列表失败: group_id={group_id}, error={e}")
+                logger.error(
+                    f"[群文件同步] 获取群文件列表失败: group_id={group_id}, error={e}"
+                )
                 return None
-            logger.warning(f"[群文件同步] 获取群文件列表失败，将重试: source={group_id}, attempt={idx + 1}, error={e}")
+            logger.warning(
+                f"[群文件同步] 获取群文件列表失败，将重试: source={group_id}, attempt={idx + 1}, error={e}"
+            )
             await asyncio.sleep(1)
         except Exception as e:
             if idx >= retry:
-                logger.error(f"[群文件同步] 获取群文件列表失败: group_id={group_id}, error={e}")
+                logger.error(
+                    f"[群文件同步] 获取群文件列表失败: group_id={group_id}, error={e}"
+                )
                 return None
-            logger.warning(f"[群文件同步] 获取群文件列表失败，将重试: source={group_id}, attempt={idx + 1}, error={e}")
+            logger.warning(
+                f"[群文件同步] 获取群文件列表失败，将重试: source={group_id}, attempt={idx + 1}, error={e}"
+            )
             await asyncio.sleep(1)
 
     return []
 
 
 def format_sync_report(stats: Dict) -> str:
-    duration_ms = stats.get('duration_ms', 0)
+    duration_ms = stats.get("duration_ms", 0)
     duration_seconds = (duration_ms + 999) // 1000
     if duration_seconds >= 60:
         minutes, seconds = divmod(duration_seconds, 60)
@@ -647,12 +772,12 @@ def format_sync_report(stats: Dict) -> str:
         duration_text = f"{duration_seconds}秒"
 
     action_items = []
-    uploaded = stats.get('uploaded', 0)
-    renamed = stats.get('renamed', 0)
-    moved = stats.get('moved', 0)
-    updated = stats.get('updated', 0)
-    deleted = stats.get('deleted', 0)
-    failed = stats.get('failed', 0)
+    uploaded = stats.get("uploaded", 0)
+    renamed = stats.get("renamed", 0)
+    moved = stats.get("moved", 0)
+    updated = stats.get("updated", 0)
+    deleted = stats.get("deleted", 0)
+    failed = stats.get("failed", 0)
 
     if uploaded > 0:
         action_items.append(f"新增: {uploaded}")
@@ -732,9 +857,13 @@ async def _simulate_folder_rename(
     4. 删除旧文件夹
     """
     # 1. 创建新文件夹
-    created = await _create_group_folder(bot, group_id, new_name, "/", is_llbot=is_llbot)
+    created = await _create_group_folder(
+        bot, group_id, new_name, "/", is_llbot=is_llbot
+    )
     if not created:
-        logger.warning(f"[群文件同步] 模拟改名：创建新文件夹失败: group_id={group_id}, new_name={new_name}")
+        logger.warning(
+            f"[群文件同步] 模拟改名：创建新文件夹失败: group_id={group_id}, new_name={new_name}"
+        )
         return False
 
     # 2. 找到新文件夹的 folder_id
@@ -746,19 +875,25 @@ async def _simulate_folder_rename(
             break
 
     if not new_folder_id:
-        logger.warning(f"[群文件同步] 模拟改名：无法找到刚创建的新文件夹: new_name={new_name}")
+        logger.warning(
+            f"[群文件同步] 模拟改名：无法找到刚创建的新文件夹: new_name={new_name}"
+        )
         return False
 
     # 3. 列出旧文件夹下所有文件
-    files = await _list_group_files_by_folder(bot, group_id, old_folder_id, is_llbot=is_llbot)
+    files = await _list_group_files_by_folder(
+        bot, group_id, old_folder_id, is_llbot=is_llbot
+    )
 
     # 4. 逐个移动到新文件夹
     for f in files:
         fid = f.get("file_id")
         if not fid:
             continue
-        old_parent = f.get("parent_id") or old_folder_id
-        move_ok = await _move_group_file(bot, group_id, fid, old_parent, new_folder_id, is_llbot=is_llbot)
+        old_parent = f.get("parent_folder_id") or old_folder_id
+        move_ok = await _move_group_file(
+            bot, group_id, fid, old_parent, new_folder_id, is_llbot=is_llbot
+        )
         if not move_ok:
             logger.warning(
                 f"[群文件同步] 模拟改名：移动文件失败: group_id={group_id}, file_id={fid}, "
@@ -766,7 +901,9 @@ async def _simulate_folder_rename(
             )
 
     # 5. 删除旧文件夹（等所有文件移走）
-    delete_ok = await _delete_group_folder(bot, group_id, old_folder_id, is_llbot=is_llbot)
+    delete_ok = await _delete_group_folder(
+        bot, group_id, old_folder_id, is_llbot=is_llbot
+    )
     if not delete_ok and files:
         logger.warning(
             f"[群文件同步] 模拟改名：旧文件夹删除失败，"
@@ -790,6 +927,8 @@ async def perform_group_file_sync(
     is_llbot: bool = False,
     rename_folder_available: bool = False,
     folder_map: Optional[Dict] = None,
+    source_cache: Optional[Dict] = None,
+    target_cache: Optional[Dict] = None,
 ) -> Tuple[Dict, Optional[Dict]]:
     source_group_id = int(source_group_id)
     target_group_id = int(target_group_id)
@@ -819,8 +958,12 @@ async def perform_group_file_sync(
     used_target_ids: Set[str] = set()
 
     try:
-        source_files = await _list_group_files_with_retry(bot, source_group_id, is_llbot=is_llbot)
-        target_files = await _list_group_files_with_retry(bot, target_group_id, is_llbot=is_llbot)
+        source_files = await _list_group_files_with_retry(
+            bot, source_group_id, is_llbot=is_llbot, file_checker_cache=source_cache
+        )
+        target_files = await _list_group_files_with_retry(
+            bot, target_group_id, is_llbot=is_llbot, file_checker_cache=target_cache
+        )
         if source_files is None or target_files is None:
             logger.error(
                 f"[群文件同步] 获取源/目标文件列表失败，终止本次同步，避免基于不完整快照误删："
@@ -830,11 +973,15 @@ async def perform_group_file_sync(
             return stats, folder_map
 
         # 只对源群快照做一次抽检：抽到不存在即认为本次快照不可信，重拉一次后继续
-        if not await _validate_source_snapshot(bot, source_group_id, source_files, sample_size=2, is_llbot=is_llbot):
+        if not await _validate_source_snapshot(
+            bot, source_group_id, source_files, sample_size=2, is_llbot=is_llbot
+        ):
             logger.warning(
                 f"[群文件同步] 源群快照抽检失败，重拉源群文件列表: source={source_group_id}, target={target_group_id}"
             )
-            source_files = await _list_group_files_with_retry(bot, source_group_id, is_llbot=is_llbot)
+            source_files = await _list_group_files_with_retry(
+                bot, source_group_id, is_llbot=is_llbot
+            )
             if source_files is None or not await _validate_source_snapshot(
                 bot,
                 source_group_id,
@@ -852,8 +999,12 @@ async def perform_group_file_sync(
         target_records = _build_filtered_snapshot(target_files, sync_cfg)
         orphan_records = _build_orphan_snapshot(target_files, sync_cfg)
 
-        source_folders = await _collect_group_folders(bot, source_group_id, is_llbot=is_llbot)
-        target_folders = await _collect_group_folders(bot, target_group_id, is_llbot=is_llbot)
+        source_folders = await _collect_group_folders(
+            bot, source_group_id, is_llbot=is_llbot
+        )
+        target_folders = await _collect_group_folders(
+            bot, target_group_id, is_llbot=is_llbot
+        )
         source_folder_names = {
             folder.get("folder_name")
             for folder in source_folders
@@ -864,7 +1015,9 @@ async def perform_group_file_sync(
                 if not isinstance(item, dict):
                     continue
 
-                raw_relative_path = _normalize_relative_path(item.get("relative_path") or "")
+                raw_relative_path = _normalize_relative_path(
+                    item.get("relative_path") or ""
+                )
                 parent_dir = _parent_path(raw_relative_path)
                 if parent_dir:
                     source_folder_names.add(parent_dir.split("/")[0])
@@ -892,12 +1045,20 @@ async def perform_group_file_sync(
                         ok = False
                         if rename_folder_available:
                             ok = await _rename_group_folder_direct(
-                                bot, target_group_id, target_fid, src_name, is_llbot=is_llbot
+                                bot,
+                                target_group_id,
+                                target_fid,
+                                src_name,
+                                is_llbot=is_llbot,
                             )
                         if not ok:
                             # 直接改名失败或无 API，降级为模拟改名
                             ok = await _simulate_folder_rename(
-                                bot, target_group_id, target_fid, src_name, is_llbot=is_llbot
+                                bot,
+                                target_group_id,
+                                target_fid,
+                                src_name,
+                                is_llbot=is_llbot,
                             )
 
                         if ok:
@@ -910,8 +1071,12 @@ async def perform_group_file_sync(
                             )
 
             if changed:
-                target_folders = await _collect_group_folders(bot, target_group_id, is_llbot=is_llbot)
-                target_files = await _list_group_files_with_retry(bot, target_group_id, is_llbot=is_llbot)
+                target_folders = await _collect_group_folders(
+                    bot, target_group_id, is_llbot=is_llbot
+                )
+                target_files = await _list_group_files_with_retry(
+                    bot, target_group_id, is_llbot=is_llbot
+                )
                 if target_files is not None:
                     target_records = _build_filtered_snapshot(target_files, sync_cfg)
                     orphan_records = _build_orphan_snapshot(target_files, sync_cfg)
@@ -919,15 +1084,20 @@ async def perform_group_file_sync(
         stats["source_total"] = len(source_files)
         stats["source_filtered"] = len(source_records)
 
-        target_path_index, target_parent_size_index, target_size_index = _build_indexes(target_records)
+        target_path_index, target_parent_size_index, target_size_index = _build_indexes(
+            target_records
+        )
 
         # 目标端全量快照：用于严格判断“本次源侧有效文件”之外的文件是否应删除
-        source_sorted = sorted(source_records, key=lambda item: (item["modify_time"], item["effective_path"]))
+        source_sorted = sorted(
+            source_records,
+            key=lambda item: (item["modify_time"], item["effective_path"]),
+        )
 
         for source_item in source_sorted:
             source_effective_path = source_item["effective_path"]
             source_parent_path = source_item["parent_path"]
-            source_size = source_item["size"]
+            source_size = source_item["file_size"]
             source_sanitized_name = source_item["sanitized_name"]
             source_file_name = source_item["file_name"]
             source_file_id = source_item.get("file_id", "")
@@ -954,12 +1124,14 @@ async def perform_group_file_sync(
                 if target_file_id:
                     used_target_ids.add(target_file_id)
 
-                if target_hit.get("size", 0) == source_size:
+                if target_hit.get("file_size", 0) == source_size:
                     stats["skipped"] += 1
                     continue
 
                 if target_file_id:
-                    delete_ok = await _delete_group_file(bot, target_group_id, target_file_id, is_llbot=is_llbot)
+                    delete_ok = await _delete_group_file(
+                        bot, target_group_id, target_file_id, is_llbot=is_llbot
+                    )
                     if not delete_ok:
                         logger.warning(
                             f"[群文件同步] 同路径覆盖前删除旧文件失败: target_group={target_group_id}, file_id={target_file_id}"
@@ -993,7 +1165,9 @@ async def perform_group_file_sync(
                 if upload_ok:
                     stats["updated"] += 1
                     if (stats["updated"] + stats["uploaded"]) % 50 == 0:
-                        logger.info(f"[群文件同步] 已上传 {stats['updated'] + stats['uploaded']} 个文件")
+                        logger.info(
+                            f"[群文件同步] 已上传 {stats['updated'] + stats['uploaded']} 个文件"
+                        )
                 else:
                     logger.warning(
                         f"[群文件同步] 覆盖上传失败: target_group={target_group_id}, source_id={source_file_id}, target_path={source_effective_path}"
@@ -1002,11 +1176,13 @@ async def perform_group_file_sync(
                 continue
 
             # 2. 同目录同体积（重命名）
-            parent_size_candidates = target_parent_size_index.get((source_parent_path, source_size), [])
+            parent_size_candidates = target_parent_size_index.get(
+                (source_parent_path, source_size), []
+            )
             rename_target = _pop_unused(parent_size_candidates, used_target_ids)
             if rename_target:
                 rename_target_id = rename_target.get("file_id")
-                rename_parent_id = rename_target.get("parent_id") or "/"
+                rename_parent_id = rename_target.get("parent_folder_id") or "/"
                 if rename_target_id:
                     used_target_ids.add(rename_target_id)
 
@@ -1040,7 +1216,7 @@ async def perform_group_file_sync(
                 if move_target_id:
                     used_target_ids.add(move_target_id)
 
-                source_parent_dir = move_target.get("parent_id") or "/"
+                source_parent_dir = move_target.get("parent_folder_id") or "/"
                 target_new_parent_id = await _resolve_folder_id(
                     bot,
                     target_group_id,
@@ -1067,9 +1243,11 @@ async def perform_group_file_sync(
                     stats["moved"] += 1
                     if move_target.get("sanitized_name") == source_sanitized_name:
                         stats["skipped"] += 1
-                    
 
-                if move_ok and move_target.get("sanitized_name") != source_sanitized_name:
+                if (
+                    move_ok
+                    and move_target.get("sanitized_name") != source_sanitized_name
+                ):
                     rename_ok, message = await rename_group_file(
                         bot,
                         target_group_id,
@@ -1119,7 +1297,9 @@ async def perform_group_file_sync(
             if upload_ok:
                 stats["uploaded"] += 1
                 if (stats["uploaded"] + stats["updated"]) % 50 == 0:
-                    logger.info(f"[群文件同步] 已上传 {stats['uploaded'] + stats['updated']} 个文件")
+                    logger.info(
+                        f"[群文件同步] 已上传 {stats['uploaded'] + stats['updated']} 个文件"
+                    )
             else:
                 stats["failed"] += 1
 
@@ -1135,7 +1315,9 @@ async def perform_group_file_sync(
 
             if file_id in used_target_ids:
                 continue
-            if await _delete_group_file(bot, target_group_id, file_id, is_llbot=is_llbot):
+            if await _delete_group_file(
+                bot, target_group_id, file_id, is_llbot=is_llbot
+            ):
                 logger.info(
                     f"[群文件同步] 已删除目标端文件: target_group={target_group_id}, "
                     f"file_id={file_id}, file_name={target_file_name}, effective_path={target_effective_path}"
@@ -1158,7 +1340,9 @@ async def perform_group_file_sync(
 
         # 更新 folder_map 中的 source_folder_id → target_folder_id 绑定
         if source_folders and folder_map is not None:
-            after_target_folders = await _collect_group_folders(bot, target_group_id, is_llbot=is_llbot)
+            after_target_folders = await _collect_group_folders(
+                bot, target_group_id, is_llbot=is_llbot
+            )
             target_by_name = {
                 f["folder_name"]: f["folder_id"]
                 for f in after_target_folders
@@ -1178,14 +1362,19 @@ async def perform_group_file_sync(
         return stats, folder_map
 
     except Exception as e:
-        logger.error(f"[群文件同步] 执行异常: source={source_group_id}, target={target_group_id}, error={e}", exc_info=True)
+        logger.error(
+            f"[群文件同步] 执行异常: source={source_group_id}, target={target_group_id}, error={e}",
+            exc_info=True,
+        )
         stats["failed"] += 1
         return stats, folder_map
     finally:
         asyncio.create_task(_cleanup_temp_path(temp_root))
 
 
-async def sync_command_handler(event, sync_configs, default_cfg, bot, run_sync_job, is_admin):
+async def sync_command_handler(
+    event, sync_configs, default_cfg, bot, run_sync_job, is_admin
+):
     """/gfs 同步指令实现"""
     if not is_admin:
         yield event.plain_result("⚠️ 您没有执行此操作的权限。")
@@ -1201,7 +1390,9 @@ async def sync_command_handler(event, sync_configs, default_cfg, bot, run_sync_j
     if len(command_parts) < 2:
         group_id_str = event.get_group_id()
         if not group_id_str:
-            yield event.plain_result("❌ 无参数时此指令只能在群聊中使用。\n用法: /gfs all 或 /gfs <源群号> <目标群号>")
+            yield event.plain_result(
+                "❌ 无参数时此指令只能在群聊中使用。\n用法: /gfs all 或 /gfs <源群号> <目标群号>"
+            )
             return
         current_gid = int(group_id_str)
 
@@ -1216,10 +1407,14 @@ async def sync_command_handler(event, sync_configs, default_cfg, bot, run_sync_j
             yield event.plain_result(f"当前群 {current_gid} 没有关联任何同步配置。")
             return
 
-        yield event.plain_result(f"🔄 找到 {len(matched)} 个关联的同步任务，开始执行...")
+        yield event.plain_result(
+            f"🔄 找到 {len(matched)} 个关联的同步任务，开始执行..."
+        )
         for mode, cfg in matched:
             tag = "⏫ 推送" if mode == "push" else "⏬ 拉取"
-            yield event.plain_result(f"{tag}: 源 {cfg['source_group_id']} → 目标 {cfg['target_group_id']}")
+            yield event.plain_result(
+                f"{tag}: 源 {cfg['source_group_id']} → 目标 {cfg['target_group_id']}"
+            )
             try:
                 await run_sync_job(cfg["source_group_id"], cfg["target_group_id"], cfg)
             except Exception as e:
@@ -1238,7 +1433,9 @@ async def sync_command_handler(event, sync_configs, default_cfg, bot, run_sync_j
                 await run_sync_job(cfg["source_group_id"], cfg["target_group_id"], cfg)
             except Exception as e:
                 logger.error(f"[/gfs all] 同步异常: {e}", exc_info=True)
-                yield event.plain_result(f"❌ 同步异常 (源 {cfg['source_group_id']} → 目标 {cfg['target_group_id']}): {e}")
+                yield event.plain_result(
+                    f"❌ 同步异常 (源 {cfg['source_group_id']} → 目标 {cfg['target_group_id']}): {e}"
+                )
         return
 
     # /gfs <源群号> <目标群号>
@@ -1262,4 +1459,6 @@ async def sync_command_handler(event, sync_configs, default_cfg, bot, run_sync_j
             yield event.plain_result(f"❌ 同步失败: {e}")
         return
 
-    yield event.plain_result("❓ 用法: /gfs (当前群关联同步) 或 /gfs all 或 /gfs <源群号> <目标群号>")
+    yield event.plain_result(
+        "❓ 用法: /gfs (当前群关联同步) 或 /gfs all 或 /gfs <源群号> <目标群号>"
+    )

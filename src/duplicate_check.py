@@ -550,7 +550,7 @@ async def detect_duplicates(
         file_list_parts = []
         for file_info in all_files:
             file_name = file_info.get("file_name", "未知")
-            file_size = file_info.get("size", 0)
+            file_size = file_info.get("file_size", 0)
             file_time = file_info.get("modify_time", 0)
 
             try:
@@ -598,7 +598,9 @@ async def detect_duplicates(
                     COMPACT_ROWS_PER_PAGE if use_compact_mode else COMFORT_ROWS_PER_PAGE
                 )
                 total_rows = len(parsed_rows)
-                template = COMPACT_REPORT_TEMPLATE if use_compact_mode else REPORT_TEMPLATE
+                template = (
+                    COMPACT_REPORT_TEMPLATE if use_compact_mode else REPORT_TEMPLATE
+                )
 
                 if use_compact_mode:
                     image_url = await html_render_fn(
