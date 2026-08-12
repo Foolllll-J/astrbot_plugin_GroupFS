@@ -1,7 +1,7 @@
 name: astrbot_plugin_GroupFS
 display_name: QQ 群文件管家
 desc: QQ 群文件管理插件，旨在简化和自动化群文件的维护工作。
-version: v1.4.0
+version: v1.4.1
 author: Foolllll
 author_url: https://github.com/Foolllll-J
 repo: https://github.com/Foolllll-J/astrbot_plugin_GroupFS

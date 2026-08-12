@@ -300,6 +300,7 @@ class GroupFSPlugin(Star):
             return False
         self.bot = bot_client
         await self._detect_llbot_backend()
+        await utils.refresh_login_uin(bot_client)
         logger.debug("[GroupFS] 已绑定 AIOCQHTTP OneBot 客户端")
         return True
 
@@ -310,6 +311,7 @@ class GroupFSPlugin(Star):
         if self._is_supported_bot_client(candidate):
             self.bot = candidate
             await self._detect_llbot_backend()
+            await utils.refresh_login_uin(candidate)
             logger.info("[GroupFS] 已切换到当前事件来源的 OneBot 客户端")
 
     async def _detect_llbot_backend(self):

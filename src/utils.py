@@ -173,6 +173,31 @@ def format_search_results(
     return reply_text
 
 
+# 每个 OneBot 客户端实例缓存的登录 uin，绑定 bot 时刷新一次
+_login_uin_cache: dict = {}
+
+
+async def refresh_login_uin(client) -> str:
+    """调用一次 get_login_info 获取登录 uin 并缓存，失败返回空字符串。"""
+    uin = ""
+    try:
+        login_info = await client.api.call_action("get_login_info")
+        if isinstance(login_info, dict) and login_info.get("user_id") is not None:
+            uin = str(login_info["user_id"])
+    except Exception:
+        pass
+    _login_uin_cache[id(client)] = uin
+    return uin
+
+
+async def get_login_uin(client) -> str:
+    """读取缓存的登录 uin，未缓存时按需获取一次。"""
+    key = id(client)
+    if key not in _login_uin_cache:
+        await refresh_login_uin(client)
+    return _login_uin_cache.get(key, "")
+
+
 async def send_report_message(
     client,
     group_id: int,
@@ -193,7 +218,7 @@ async def _send_forward_text(
     text: str,
     node_name: str,
 ) -> None:
-    uin = str(client.self_id)
+    uin = await get_login_uin(client)
     nodes = [
         {
             "type": "node",
